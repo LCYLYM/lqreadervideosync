@@ -560,9 +560,9 @@ video {
 
 .preprocess-card {
   display: grid;
-  gap: 8px;
-  min-height: 174px;
-  padding: 18px;
+  gap: 6px;
+  min-height: 138px;
+  padding: 15px 16px;
   border-radius: 22px;
   transition:
     transform 180ms ease,
@@ -571,7 +571,7 @@ video {
 }
 
 .preprocess-card strong {
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1.4;
 }
 
@@ -587,8 +587,9 @@ video {
 
 .preprocess-actions {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .progress-cluster,
@@ -802,6 +803,18 @@ dd {
   align-items: baseline;
   justify-content: space-between;
   gap: 16px;
+}
+
+.preprocess-panel .log-header p {
+  margin: 0;
+  max-width: 620px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.preprocess-panel .preview-text {
+  font-size: 13px;
+  color: var(--muted);
 }
 
 #status-text {

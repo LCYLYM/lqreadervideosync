@@ -91,7 +91,7 @@
       <section class="panel preprocess-panel">
         <div class="log-header">
           <h2>视频兼容与预处理</h2>
-          <p>扩展已内置本地 FFmpeg Core。拖入视频后会先探测真实流信息，再决定是直接进入原生播放器还是一键预处理。</p>
+          <p>先探测真实音视频流，再决定直接播放还是只转需要处理的部分。</p>
         </div>
         <div class="preprocess-grid">
           <article class="preprocess-card">
@@ -111,7 +111,7 @@
               <progress id="video-processing-progress-bar" max="100" value="0"></progress>
               <span id="video-processing-progress">0%</span>
             </div>
-            <p id="video-processing-note" class="preview-text">如果文件偏离推荐的 HVC1 + AAC 基线，可以直接试播，也可以一键预处理后播放。</p>
+            <p id="video-processing-note" class="preview-text">可直接试播，也可只处理不兼容的轨道后再播放。</p>
           </article>
         </div>
         <div class="preprocess-actions">

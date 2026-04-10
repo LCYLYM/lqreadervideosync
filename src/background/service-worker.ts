@@ -18,6 +18,12 @@ const articleSnapshotErrors = new Map<number, string>();
 
 let preferredTabId: number | null = null;
 
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
 function postMessage(port: chrome.runtime.Port, message: RuntimeMessage): void {
   try {
     port.postMessage(message);
@@ -32,17 +38,32 @@ function broadcastToPlayers(message: RuntimeMessage): void {
   }
 }
 
-function broadcastToContent(message: RuntimeMessage, targetTabId: number | null): void {
-  if (targetTabId !== null) {
-    const port = contentPorts.get(targetTabId);
-    if (port) {
-      postMessage(port, message);
-    }
+function getKnownReaderTabIds(): number[] {
+  return Array.from(new Set([...pageContexts.keys(), ...articleSnapshots.keys(), ...contentPorts.keys()]));
+}
+
+async function postMessageToReaderTab(tabId: number, message: RuntimeMessage): Promise<void> {
+  const port = contentPorts.get(tabId);
+  if (port) {
+    postMessage(port, message);
     return;
   }
 
-  for (const port of contentPorts.values()) {
-    postMessage(port, message);
+  try {
+    await chrome.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    logger.warn("tabs.sendMessage failed", { tabId, type: message.type, error });
+  }
+}
+
+function broadcastToContent(message: RuntimeMessage, targetTabId: number | null): void {
+  if (targetTabId !== null) {
+    void postMessageToReaderTab(targetTabId, message);
+    return;
+  }
+
+  for (const tabId of getKnownReaderTabIds()) {
+    void postMessageToReaderTab(tabId, message);
   }
 }
 
@@ -52,11 +73,20 @@ async function getFallbackAimReadTabId(): Promise<number | null> {
     currentWindow: true,
     url: ["https://aim-read.top/*"]
   });
-  return tabs[0]?.id ?? null;
+  for (const tab of tabs) {
+    if (typeof tab.id === "number" && pageContexts.has(tab.id)) {
+      return tab.id;
+    }
+  }
+  return null;
+}
+
+function getConnectedReaderTabIds(): number[] {
+  return Array.from(pageContexts.keys());
 }
 
 async function resolveTargetTabId(): Promise<number | null> {
-  if (preferredTabId !== null && contentPorts.has(preferredTabId)) {
+  if (preferredTabId !== null && contentPorts.has(preferredTabId) && pageContexts.has(preferredTabId)) {
     return preferredTabId;
   }
 
@@ -66,7 +96,7 @@ async function resolveTargetTabId(): Promise<number | null> {
     return fallbackTabId;
   }
 
-  const connectedTabId = contentPorts.keys().next().value;
+  const connectedTabId = getConnectedReaderTabIds()[0];
   if (typeof connectedTabId === "number") {
     preferredTabId = connectedTabId;
     return connectedTabId;
@@ -80,27 +110,21 @@ async function collectPreferredPageContext(targetTabId: number | null): Promise<
   if (targetTabId === null) {
     return;
   }
-  const contentPort = contentPorts.get(targetTabId);
-  if (!contentPort) {
-    return;
-  }
-  postMessage(contentPort, { type: "COLLECT_PAGE_CONTEXT" });
+  await postMessageToReaderTab(targetTabId, { type: "COLLECT_PAGE_CONTEXT" });
 }
 
 async function collectPreferredArticleSnapshot(targetTabId: number | null): Promise<void> {
   if (targetTabId === null) {
+    logger.warn("Skipping article snapshot request because no target reader tab is available");
     return;
   }
-  const contentPort = contentPorts.get(targetTabId);
-  if (!contentPort) {
-    return;
-  }
-  postMessage(contentPort, { type: "COLLECT_ARTICLE_SNAPSHOT" });
+  logger.info("Requesting article snapshot from reader tab", { targetTabId });
+  await postMessageToReaderTab(targetTabId, { type: "COLLECT_ARTICLE_SNAPSHOT" });
 }
 
 async function buildConnectedTabsSnapshot(): Promise<ConnectedAimReadTab[]> {
   const snapshots = await Promise.all(
-    Array.from(contentPorts.keys()).map(async (tabId) => {
+    getConnectedReaderTabIds().map(async (tabId) => {
       try {
         const tab = await chrome.tabs.get(tabId);
         const pageContext = pageContexts.get(tabId) ?? null;
@@ -152,6 +176,17 @@ async function pushConnectedTabsSnapshot(): Promise<void> {
   });
 }
 
+async function refreshConnectedTabsState(port?: chrome.runtime.Port): Promise<void> {
+  if (contentPorts.size > 0) {
+    broadcastToContent({ type: "COLLECT_PAGE_CONTEXT" }, null);
+    await wait(140);
+  }
+
+  await pushConnectedTabsSnapshot();
+  await pushActivePageContext(port);
+  await pushActiveArticleSnapshot(port);
+}
+
 async function pushActivePageContext(port?: chrome.runtime.Port): Promise<void> {
   const targetTabId = await resolveTargetTabId();
   const message: RuntimeMessage = {
@@ -195,12 +230,6 @@ function removePort(port: chrome.runtime.Port): void {
   for (const [tabId, candidate] of contentPorts.entries()) {
     if (candidate === port) {
       contentPorts.delete(tabId);
-      pageContexts.delete(tabId);
-      articleSnapshots.delete(tabId);
-      articleSnapshotErrors.delete(tabId);
-      if (preferredTabId === tabId) {
-        preferredTabId = null;
-      }
       break;
     }
   }
@@ -229,25 +258,26 @@ async function handlePlayerMessage(port: chrome.runtime.Port, message: RuntimeMe
     case "REQUEST_ACTIVE_PAGE_CONTEXT": {
       const targetTabId = await resolveTargetTabId();
       await collectPreferredPageContext(targetTabId);
+      await wait(120);
       await pushActivePageContext(port);
       return;
     }
     case "REQUEST_ACTIVE_ARTICLE_SNAPSHOT": {
       const targetTabId = await resolveTargetTabId();
+      logger.info("Player requested active article snapshot", { targetTabId });
       await collectPreferredArticleSnapshot(targetTabId);
       await pushActiveArticleSnapshot(port);
       return;
     }
     case "REQUEST_CONNECTED_TABS": {
-      await pushConnectedTabsSnapshot();
-      await pushActivePageContext(port);
-      await pushActiveArticleSnapshot(port);
+      await refreshConnectedTabsState(port);
       return;
     }
     case "SET_PREFERRED_TAB": {
       preferredTabId = message.payload.tabId;
       await collectPreferredPageContext(preferredTabId);
       await collectPreferredArticleSnapshot(preferredTabId);
+      await wait(120);
       await pushConnectedTabsSnapshot();
       await pushActivePageContext();
       await pushActiveArticleSnapshot();
@@ -293,6 +323,12 @@ function handleContentMessage(message: RuntimeMessage, tabId: number): void {
       return;
     }
     case "ARTICLE_SNAPSHOT_UPDATE":
+      logger.info("Received article snapshot update from reader tab", {
+        tabId,
+        articleId: message.payload.articleId,
+        paragraphCount: message.payload.paragraphs.length,
+        totalPages: message.payload.pageInfo?.totalPages ?? null
+      });
       articleSnapshots.set(tabId, message.payload);
       articleSnapshotErrors.delete(tabId);
       if (preferredTabId === null) {
@@ -309,6 +345,10 @@ function handleContentMessage(message: RuntimeMessage, tabId: number): void {
       void pushActiveArticleSnapshot();
       return;
     case "ARTICLE_SNAPSHOT_ERROR":
+      logger.warn("Received article snapshot error from reader tab", {
+        tabId,
+        message: message.payload.message
+      });
       articleSnapshots.delete(tabId);
       articleSnapshotErrors.set(tabId, message.payload.message);
       if (preferredTabId === null) {
@@ -357,9 +397,6 @@ chrome.action.onClicked.addListener(() => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (!contentPorts.has(tabId)) {
-    return;
-  }
   contentPorts.delete(tabId);
   pageContexts.delete(tabId);
   articleSnapshots.delete(tabId);
@@ -383,9 +420,7 @@ chrome.runtime.onConnect.addListener((port) => {
   logger.info("Port connected", { name: port.name });
   if (port.name === PLAYER_PORT_NAME) {
     playerPorts.add(port);
-    void pushConnectedTabsSnapshot();
-    void pushActivePageContext(port);
-    void pushActiveArticleSnapshot(port);
+    void refreshConnectedTabsState(port);
   }
   if (port.name === CONTENT_PORT_NAME) {
     const tabId = port.sender?.tab?.id;

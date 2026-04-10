@@ -55,7 +55,6 @@ interface RemoteIndexResponse {
 }
 
 const logger = createLogger("player");
-const port = chrome.runtime.connect({ name: PLAYER_PORT_NAME });
 
 const storageKey = "reader-sync-manifest-base-url";
 const searchParameters = new URLSearchParams(window.location.search);
@@ -180,6 +179,7 @@ let pageContext: AimReadPageContext | null = null;
 let articleSnapshot: AimReadArticleSnapshot | null = null;
 let articleSnapshotError: string | null = null;
 let activePageTabId: number | null = null;
+let boundPageTabId: number | null = null;
 let connectedTabs: ConnectedAimReadTab[] = [];
 let remoteManifestCandidates: RemoteManifestCandidate[] = [];
 let manifestObjectUrl: string | null = null;
@@ -210,6 +210,88 @@ let runtimeBuildFingerprint: string | null = null;
 let runtimeBuildRequestedFingerprint: string | null = null;
 let runtimeBuildFailedFingerprint: string | null = null;
 let runtimeBuildToken = 0;
+let playerPort: chrome.runtime.Port | null = null;
+let playerPortReconnectTimer: number | null = null;
+let playerPageUnloading = false;
+let pageContextTabResolutionInFlight: Promise<void> | null = null;
+let pageContextTabResolutionKey: string | null = null;
+
+function clearPlayerPortReconnectTimer(): void {
+  if (playerPortReconnectTimer !== null) {
+    window.clearTimeout(playerPortReconnectTimer);
+    playerPortReconnectTimer = null;
+  }
+}
+
+function schedulePlayerPortReconnect(delayMs = 280): void {
+  if (playerPortReconnectTimer !== null) {
+    return;
+  }
+  playerPortReconnectTimer = window.setTimeout(() => {
+    playerPortReconnectTimer = null;
+    connectPlayerPort();
+  }, delayMs);
+}
+
+function handlePlayerPortDisconnect(disconnectedPort: chrome.runtime.Port): void {
+  if (playerPort !== disconnectedPort) {
+    return;
+  }
+  playerPort = null;
+  if (playerPageUnloading) {
+    return;
+  }
+  appendLog("播放器后台连接已断开，准备自动重连");
+  schedulePlayerPortReconnect();
+}
+
+function connectPlayerPort(): chrome.runtime.Port {
+  if (playerPort) {
+    return playerPort;
+  }
+
+  clearPlayerPortReconnectTimer();
+  const nextPort = chrome.runtime.connect({ name: PLAYER_PORT_NAME });
+  playerPort = nextPort;
+  nextPort.onMessage.addListener(handleRuntimeMessage);
+  nextPort.onDisconnect.addListener(() => {
+    handlePlayerPortDisconnect(nextPort);
+  });
+  return nextPort;
+}
+
+function postRuntimeMessage(message: RuntimeMessage, options?: { retry?: boolean }): boolean {
+  const retry = options?.retry !== false;
+  const targetPort = connectPlayerPort();
+
+  try {
+    targetPort.postMessage(message);
+    return true;
+  } catch (error) {
+    logger.warn("Player port postMessage failed", { type: message.type, error });
+    if (playerPort === targetPort) {
+      playerPort = null;
+    }
+    schedulePlayerPortReconnect();
+
+    if (!retry) {
+      return false;
+    }
+
+    try {
+      const retriedPort = connectPlayerPort();
+      retriedPort.postMessage(message);
+      return true;
+    } catch (retryError) {
+      logger.warn("Player port retry postMessage failed", { type: message.type, error: retryError });
+      if (playerPort === targetPort) {
+        playerPort = null;
+      }
+      schedulePlayerPortReconnect(420);
+      return false;
+    }
+  }
+}
 
 function setStatus(message: string): void {
   elements.statusText.textContent = message;
@@ -628,6 +710,148 @@ function createSyntheticConnectedTab(pageContextValue: AimReadPageContext, tabId
   };
 }
 
+function createRecoveredConnectedTab(pageContextValue: AimReadPageContext, tab: chrome.tabs.Tab): ConnectedAimReadTab | null {
+  if (typeof tab.id !== "number") {
+    return null;
+  }
+  return {
+    tabId: tab.id,
+    windowId: tab.windowId ?? -1,
+    active: Boolean(tab.active),
+    title: pageContextValue.title,
+    url: pageContextValue.articleUrl,
+    articleId: pageContextValue.articleId,
+    categoryId: pageContextValue.categoryId,
+    paragraphCount: pageContextValue.paragraphs.length,
+    preferred: boundPageTabId === tab.id || activePageTabId === tab.id,
+    capturedAt: pageContextValue.capturedAt
+  };
+}
+
+function resolveArticleIdFromUrlString(urlValue: string): number | null {
+  try {
+    const match = new URL(urlValue).pathname.match(/\/daily-feed\/(\d+)/);
+    if (!match) {
+      return null;
+    }
+    const parsed = Number.parseInt(match[1], 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveCategoryIdFromUrlString(urlValue: string): number | null {
+  try {
+    const rawValue = new URL(urlValue).searchParams.get("categoryId");
+    if (!rawValue) {
+      return null;
+    }
+    const parsed = Number.parseInt(rawValue, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildPageContextResolutionKey(pageContextValue: AimReadPageContext): string {
+  return [
+    pageContextValue.articleUrl,
+    pageContextValue.articleId ?? "-",
+    pageContextValue.categoryId ?? "-"
+  ].join("|");
+}
+
+function scoreTabAgainstPageContext(tab: chrome.tabs.Tab, pageContextValue: AimReadPageContext): number {
+  const tabUrl = tab.url ?? "";
+  if (!tabUrl.startsWith("https://aim-read.top/")) {
+    return -1;
+  }
+
+  let score = 0;
+  if (tabUrl === pageContextValue.articleUrl) {
+    score += 100;
+  }
+
+  const tabArticleId = resolveArticleIdFromUrlString(tabUrl);
+  const tabCategoryId = resolveCategoryIdFromUrlString(tabUrl);
+  if (pageContextValue.articleId !== null && tabArticleId === pageContextValue.articleId) {
+    score += 60;
+  }
+  if (pageContextValue.categoryId !== null && tabCategoryId === pageContextValue.categoryId) {
+    score += 25;
+  }
+  if (tab.active) {
+    score += 8;
+  }
+  return score;
+}
+
+async function resolvePageContextTabIdFromBrowser(pageContextValue: AimReadPageContext): Promise<void> {
+  const resolutionKey = buildPageContextResolutionKey(pageContextValue);
+  if (pageContextTabResolutionInFlight && pageContextTabResolutionKey === resolutionKey) {
+    return pageContextTabResolutionInFlight;
+  }
+
+  pageContextTabResolutionKey = resolutionKey;
+  pageContextTabResolutionInFlight = (async () => {
+    try {
+      const tabs = await chrome.tabs.query({ url: ["https://aim-read.top/*"] });
+      const resolvedTab =
+        tabs
+          .map((tab) => ({ tab, score: scoreTabAgainstPageContext(tab, pageContextValue) }))
+          .filter((entry) => entry.score > 0 && typeof entry.tab.id === "number")
+          .sort((left, right) => right.score - left.score)[0]?.tab ?? null;
+
+      if (!resolvedTab || typeof resolvedTab.id !== "number") {
+        return;
+      }
+
+      const resolvedTabId = resolvedTab.id;
+      const tabAlreadyKnown = connectedTabs.some((tab) => tab.tabId === resolvedTabId);
+      let shouldRender = false;
+
+      if (activePageTabId !== resolvedTabId) {
+        activePageTabId = resolvedTabId;
+        shouldRender = true;
+      }
+      if (boundPageTabId === null || boundPageTabId === activePageTabId) {
+        if (boundPageTabId !== resolvedTabId) {
+          boundPageTabId = resolvedTabId;
+          shouldRender = true;
+        }
+      }
+
+      if (!tabAlreadyKnown) {
+        const recoveredTab = createRecoveredConnectedTab(pageContextValue, resolvedTab);
+        if (recoveredTab) {
+          connectedTabs = sortConnectedTabs([...connectedTabs, recoveredTab]);
+          shouldRender = true;
+        }
+      }
+
+      if (shouldRender) {
+        renderConnectedTabs();
+        renderCurrentSyncDetails(currentPlaybackTimeMs());
+      }
+
+      requestConnectedTabs();
+    } catch (error) {
+      appendLog("根据页面快照反查真实阅读页失败", {
+        message: error instanceof Error ? error.message : String(error),
+        articleUrl: pageContextValue.articleUrl
+      });
+    } finally {
+      pageContextTabResolutionInFlight = null;
+      if (pageContextTabResolutionKey === resolutionKey) {
+        pageContextTabResolutionKey = null;
+      }
+    }
+  })();
+
+  return pageContextTabResolutionInFlight;
+}
+
 function sortConnectedTabs(tabs: ConnectedAimReadTab[]): ConnectedAimReadTab[] {
   return [...tabs].sort((left, right) => {
     if (left.preferred !== right.preferred) {
@@ -647,7 +871,7 @@ function deriveEffectiveConnectedTabs(): ConnectedAimReadTab[] {
   }
 
   if (pageContext) {
-    const syntheticTab = createSyntheticConnectedTab(pageContext, activePageTabId);
+    const syntheticTab = createSyntheticConnectedTab(pageContext, activePageTabId ?? boundPageTabId);
     if (syntheticTab.tabId > 0 && tabsById.has(syntheticTab.tabId)) {
       const current = tabsById.get(syntheticTab.tabId);
       if (current) {
@@ -672,6 +896,12 @@ function deriveEffectiveConnectedTabs(): ConnectedAimReadTab[] {
 function resolveSelectedConnectedTab(tabs: ConnectedAimReadTab[]): ConnectedAimReadTab | null {
   if (tabs.length === 0) {
     return null;
+  }
+  if (boundPageTabId !== null) {
+    const boundTab = tabs.find((tab) => tab.tabId === boundPageTabId);
+    if (boundTab) {
+      return boundTab;
+    }
   }
   if (activePageTabId !== null) {
     const activeTab = tabs.find((tab) => tab.tabId === activePageTabId);
@@ -882,6 +1112,11 @@ function updatePageContext(pageContextValue: AimReadPageContext | null, tabId: n
   pageContext = pageContextValue;
   if (typeof tabId === "number") {
     activePageTabId = tabId;
+    if (boundPageTabId === null) {
+      boundPageTabId = tabId;
+    }
+  } else if (pageContextValue) {
+    void resolvePageContextTabIdFromBrowser(pageContextValue);
   } else if (!pageContextValue) {
     activePageTabId = null;
   }
@@ -912,6 +1147,11 @@ function updateArticleSnapshot(snapshot: AimReadArticleSnapshot | null, error: s
   articleSnapshotError = error;
   if (typeof tabId === "number") {
     activePageTabId = tabId;
+    if (boundPageTabId === null) {
+      boundPageTabId = tabId;
+    }
+  } else if (snapshot && pageContext) {
+    void resolvePageContextTabIdFromBrowser(pageContext);
   } else if (!snapshot && !pageContext) {
     activePageTabId = null;
   }
@@ -936,7 +1176,7 @@ function updateArticleSnapshot(snapshot: AimReadArticleSnapshot | null, error: s
 }
 
 function requestArticleSnapshot(): void {
-  port.postMessage({ type: "REQUEST_ACTIVE_ARTICLE_SNAPSHOT" } satisfies RuntimeMessage);
+  postRuntimeMessage({ type: "REQUEST_ACTIVE_ARTICLE_SNAPSHOT" } satisfies RuntimeMessage);
 }
 
 function rebuildManifestLookups(manifestValue: EpisodeSyncManifest): void {
@@ -1064,10 +1304,22 @@ function renderConnectedTabs(): void {
 
 function updateConnectedTabs(payload: { preferredTabId: number | null; tabs: ConnectedAimReadTab[] }): void {
   connectedTabs = payload.tabs;
+  const nextPreferredTabId = payload.preferredTabId ?? payload.tabs[0]?.tabId ?? null;
+  const availableTabIds = new Set(payload.tabs.map((tab) => tab.tabId));
+  if (typeof nextPreferredTabId === "number") {
+    boundPageTabId = nextPreferredTabId;
+  } else if (!pageContext) {
+    boundPageTabId = null;
+  }
+
   if (activePageTabId === null) {
-    activePageTabId = payload.preferredTabId ?? payload.tabs[0]?.tabId ?? null;
-  } else if (!payload.tabs.some((tab) => tab.tabId === activePageTabId) && !pageContext) {
-    activePageTabId = payload.preferredTabId ?? payload.tabs[0]?.tabId ?? null;
+    activePageTabId = nextPreferredTabId;
+  } else if (!availableTabIds.has(activePageTabId) && !pageContext) {
+    activePageTabId = nextPreferredTabId;
+  }
+
+  if (boundPageTabId !== null && !availableTabIds.has(boundPageTabId) && !pageContext) {
+    boundPageTabId = nextPreferredTabId;
   }
   renderConnectedTabs();
   renderCurrentSyncDetails(currentPlaybackTimeMs());
@@ -1214,7 +1466,7 @@ function broadcastPlayerState(force = false): void {
 
   const currentTimeMs = currentPlaybackTimeMs();
   const syncEntry = resolveActiveSyncEntry(manifest, currentTimeMs);
-  port.postMessage({
+  postRuntimeMessage({
     type: "PLAYER_STATE_UPDATE",
     payload: {
       currentTimeMs,
@@ -1223,7 +1475,7 @@ function broadcastPlayerState(force = false): void {
       manifestSlug: manifest?.source.slug ?? null,
       playbackRate: elements.video.playbackRate
     }
-  } satisfies RuntimeMessage);
+  } satisfies RuntimeMessage, { retry: false });
   renderCurrentSyncDetails(currentTimeMs);
 }
 
@@ -2212,7 +2464,7 @@ async function togglePictureInPicture(): Promise<void> {
 }
 
 function requestConnectedTabs(): void {
-  port.postMessage({ type: "REQUEST_CONNECTED_TABS" } satisfies RuntimeMessage);
+  postRuntimeMessage({ type: "REQUEST_CONNECTED_TABS" } satisfies RuntimeMessage);
 }
 
 function bindSelectedPage(): void {
@@ -2220,7 +2472,9 @@ function bindSelectedPage(): void {
   if (!Number.isFinite(tabId)) {
     return;
   }
-  port.postMessage({
+  boundPageTabId = tabId;
+  renderConnectedTabs();
+  postRuntimeMessage({
     type: "SET_PREFERRED_TAB",
     payload: { tabId }
   } satisfies RuntimeMessage);
@@ -2352,7 +2606,7 @@ elements.loadRemoteCandidateButton?.addEventListener("click", async () => {
 });
 
 elements.requestPageContextButton.addEventListener("click", () => {
-  port.postMessage({ type: "REQUEST_ACTIVE_PAGE_CONTEXT" } satisfies RuntimeMessage);
+  postRuntimeMessage({ type: "REQUEST_ACTIVE_PAGE_CONTEXT" } satisfies RuntimeMessage);
   if (subtitleAutoBuildEnabled) {
     requestArticleSnapshot();
   }
@@ -2563,7 +2817,7 @@ elements.video.addEventListener("error", () => {
   });
 });
 
-port.onMessage.addListener((message: RuntimeMessage) => {
+function handleRuntimeMessage(message: RuntimeMessage): void {
   switch (message.type) {
     case "ACTIVE_ARTICLE_SNAPSHOT_RESPONSE":
       updateArticleSnapshot(message.payload.articleSnapshot, message.payload.error, message.payload.tabId);
@@ -2587,7 +2841,7 @@ port.onMessage.addListener((message: RuntimeMessage) => {
     default:
       return;
   }
-});
+}
 
 if (elements.manifestBaseUrl) {
   elements.manifestBaseUrl.value = localStorage.getItem(storageKey) ?? "";
@@ -2617,15 +2871,19 @@ renderRemoteManifestCandidates();
 renderConnectedTabs();
 renderCurrentSyncDetails(currentPlaybackTimeMs());
 setStatus("等待输入。");
+connectPlayerPort();
 requestConnectedTabs();
-port.postMessage({ type: "REQUEST_ACTIVE_PAGE_CONTEXT" } satisfies RuntimeMessage);
+postRuntimeMessage({ type: "REQUEST_ACTIVE_PAGE_CONTEXT" } satisfies RuntimeMessage);
 window.addEventListener("beforeunload", () => {
+  playerPageUnloading = true;
   if (videoObjectUrl) {
     URL.revokeObjectURL(videoObjectUrl);
   }
   if (processedVideoObjectUrl) {
     URL.revokeObjectURL(processedVideoObjectUrl);
   }
+  clearPlayerPortReconnectTimer();
+  playerPort?.disconnect();
   browserFfmpegService.terminate();
 });
 void loadShortcutSettings().catch((error: unknown) => {

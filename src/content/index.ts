@@ -5,7 +5,6 @@ import { AimReadDomController } from "./aimReadAdapter";
 
 const logger = createLogger("content");
 const controller = new AimReadDomController();
-const port = chrome.runtime.connect({ name: CONTENT_PORT_NAME });
 const globalWindow = window as Window & { __readerSyncCollectTimer?: number };
 const handledKeyboardEvents = new WeakSet<KeyboardEvent>();
 const shortcutStorageKey = "reader-sync-shortcut-settings";
@@ -37,6 +36,85 @@ let lastPageContextSignature: string | null = null;
 let paragraphRevealInFlight: Promise<void> | null = null;
 let pendingRevealParagraphIndex: number | null = null;
 let lastPlayerState: PlaybackState = "idle";
+let contentPort: chrome.runtime.Port | null = null;
+let contentPortReconnectTimer: number | null = null;
+let contentPageUnloading = false;
+
+function clearContentPortReconnectTimer(): void {
+  if (contentPortReconnectTimer !== null) {
+    window.clearTimeout(contentPortReconnectTimer);
+    contentPortReconnectTimer = null;
+  }
+}
+
+function scheduleContentPortReconnect(delayMs = 280): void {
+  if (contentPortReconnectTimer !== null || contentPageUnloading) {
+    return;
+  }
+  contentPortReconnectTimer = window.setTimeout(() => {
+    contentPortReconnectTimer = null;
+    connectContentPort();
+  }, delayMs);
+}
+
+function handleContentPortDisconnect(disconnectedPort: chrome.runtime.Port): void {
+  if (contentPort !== disconnectedPort) {
+    return;
+  }
+  contentPort = null;
+  if (contentPageUnloading) {
+    return;
+  }
+  logger.warn("Content port disconnected, scheduling reconnect");
+  scheduleContentPortReconnect();
+}
+
+function connectContentPort(): chrome.runtime.Port {
+  if (contentPort) {
+    return contentPort;
+  }
+  clearContentPortReconnectTimer();
+  const nextPort = chrome.runtime.connect({ name: CONTENT_PORT_NAME });
+  logger.info("Content port connected");
+  contentPort = nextPort;
+  nextPort.onMessage.addListener(handleRuntimeMessage);
+  nextPort.onDisconnect.addListener(() => {
+    handleContentPortDisconnect(nextPort);
+  });
+  window.setTimeout(() => {
+    collectAndSendPageContext();
+  }, 0);
+  return nextPort;
+}
+
+function postRuntimeMessage(message: RuntimeMessage, options?: { retry?: boolean }): boolean {
+  const retry = options?.retry !== false;
+  const targetPort = connectContentPort();
+
+  try {
+    targetPort.postMessage(message);
+    return true;
+  } catch (error) {
+    logger.warn("Content port postMessage failed", { type: message.type, error });
+    if (contentPort === targetPort) {
+      contentPort = null;
+    }
+    scheduleContentPortReconnect();
+    if (!retry) {
+      return false;
+    }
+
+    try {
+      const retriedPort = connectContentPort();
+      retriedPort.postMessage(message);
+      return true;
+    } catch (retryError) {
+      logger.warn("Content port retry postMessage failed", { type: message.type, error: retryError });
+      scheduleContentPortReconnect(420);
+      return false;
+    }
+  }
+}
 
 function isExtensionOwnedNode(node: Node | null): boolean {
   if (!node) {
@@ -145,6 +223,8 @@ function collectAndSendPageContext(): void {
   const pageContext = controller.collectPageContext();
   if (!pageContext) {
     logger.debug("No aim-read article context detected on current page");
+    lastPageContextSignature = null;
+    lastPageContextParagraphIndexes = [];
     return;
   }
   const contextSignature = JSON.stringify({
@@ -163,7 +243,7 @@ function collectAndSendPageContext(): void {
     return;
   }
   lastPageContextSignature = contextSignature;
-  port.postMessage({
+  postRuntimeMessage({
     type: "PAGE_CONTEXT_UPDATE",
     payload: pageContext
   } satisfies RuntimeMessage);
@@ -178,17 +258,28 @@ function scheduleCollect(delayMs = 350): void {
 }
 
 async function collectAndSendArticleSnapshot(articleUrl: string): Promise<void> {
+  logger.info("Starting full article snapshot collection", { articleUrl });
   try {
     const articleSnapshot = await collectCompleteArticleSnapshot();
     lastCollectedArticleUrl = articleUrl;
-    port.postMessage({
+    logger.info("Collected full article snapshot", {
+      articleUrl,
+      articleId: articleSnapshot.articleId,
+      paragraphCount: articleSnapshot.paragraphs.length,
+      totalPages: articleSnapshot.pageInfo?.totalPages ?? null
+    });
+    postRuntimeMessage({
       type: "ARTICLE_SNAPSHOT_UPDATE",
       payload: articleSnapshot
     } satisfies RuntimeMessage);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("当前页面不是可识别的 aim-read 剧集文章页")) {
+      logger.debug("Skipping article snapshot collection on non-reader page", { articleUrl });
+      return;
+    }
     logger.warn("Failed to collect full article snapshot", { message });
-    port.postMessage({
+    postRuntimeMessage({
       type: "ARTICLE_SNAPSHOT_ERROR",
       payload: { message }
     } satisfies RuntimeMessage);
@@ -200,14 +291,17 @@ function ensureArticleSnapshotCollection(articleUrl: string, options?: { force?:
   const now = Date.now();
 
   if (!force && lastCollectedArticleUrl === articleUrl) {
+    logger.debug("Skipping article snapshot collection because article was already collected", { articleUrl });
     return Promise.resolve();
   }
 
   if (articleSnapshotInFlight) {
+    logger.debug("Reusing in-flight article snapshot collection", { articleUrl, force });
     return articleSnapshotInFlight;
   }
 
   if (!force && now - lastArticleSnapshotAttemptAt < 1200) {
+    logger.debug("Skipping article snapshot collection because of throttle window", { articleUrl, force });
     return Promise.resolve();
   }
 
@@ -304,20 +398,25 @@ async function ensureParagraphVisible(paragraphIndex: number): Promise<void> {
 }
 
 controller.onParagraphClick((paragraphIndex) => {
-  port.postMessage({
+  postRuntimeMessage({
     type: "PAGE_PARAGRAPH_CLICKED",
     payload: { paragraphIndex }
   } satisfies RuntimeMessage);
 });
 
-port.onMessage.addListener((message: RuntimeMessage) => {
+function handleRuntimeMessage(message: RuntimeMessage): void {
   switch (message.type) {
     case "COLLECT_ARTICLE_SNAPSHOT": {
       const pageContext = controller.collectPageContext();
       if (!pageContext) {
-        void collectAndSendArticleSnapshot(window.location.href);
+        logger.debug("Ignoring COLLECT_ARTICLE_SNAPSHOT because page context is unavailable");
         return;
       }
+      logger.info("Received COLLECT_ARTICLE_SNAPSHOT", {
+        articleUrl: pageContext.articleUrl,
+        articleId: pageContext.articleId,
+        categoryId: pageContext.categoryId
+      });
       void ensureArticleSnapshotCollection(pageContext.articleUrl, { force: true });
       return;
     }
@@ -337,6 +436,10 @@ port.onMessage.addListener((message: RuntimeMessage) => {
     default:
       return;
   }
+}
+
+chrome.runtime.onMessage.addListener((message: unknown) => {
+  handleRuntimeMessage(message as RuntimeMessage);
 });
 
 const observer = new MutationObserver((mutations) => {
@@ -383,7 +486,7 @@ function handleReaderPageKeyboardShortcut(event: KeyboardEvent): void {
   if (matchesConfiguredShortcut(event, shortcutSettings.togglePlayback)) {
     handledKeyboardEvents.add(event);
     event.preventDefault();
-    port.postMessage({
+    postRuntimeMessage({
       type: "PLAYER_CONTROL_COMMAND",
       payload: {
         command: "toggle_playback",
@@ -396,7 +499,7 @@ function handleReaderPageKeyboardShortcut(event: KeyboardEvent): void {
   if (matchesConfiguredShortcut(event, shortcutSettings.seekBackward)) {
     handledKeyboardEvents.add(event);
     event.preventDefault();
-    port.postMessage({
+    postRuntimeMessage({
       type: "PLAYER_CONTROL_COMMAND",
       payload: {
         command: "seek_by",
@@ -410,7 +513,7 @@ function handleReaderPageKeyboardShortcut(event: KeyboardEvent): void {
   if (matchesConfiguredShortcut(event, shortcutSettings.seekForward)) {
     handledKeyboardEvents.add(event);
     event.preventDefault();
-    port.postMessage({
+    postRuntimeMessage({
       type: "PLAYER_CONTROL_COMMAND",
       payload: {
         command: "seek_by",
@@ -424,7 +527,7 @@ function handleReaderPageKeyboardShortcut(event: KeyboardEvent): void {
   if (matchesConfiguredShortcut(event, shortcutSettings.rateDown)) {
     handledKeyboardEvents.add(event);
     event.preventDefault();
-    port.postMessage({
+    postRuntimeMessage({
       type: "PLAYER_CONTROL_COMMAND",
       payload: {
         command: "step_playback_rate",
@@ -438,7 +541,7 @@ function handleReaderPageKeyboardShortcut(event: KeyboardEvent): void {
   if (matchesConfiguredShortcut(event, shortcutSettings.rateUp)) {
     handledKeyboardEvents.add(event);
     event.preventDefault();
-    port.postMessage({
+    postRuntimeMessage({
       type: "PLAYER_CONTROL_COMMAND",
       payload: {
         command: "step_playback_rate",
@@ -452,6 +555,11 @@ function handleReaderPageKeyboardShortcut(event: KeyboardEvent): void {
 
 window.addEventListener("keydown", handleReaderPageKeyboardShortcut, { capture: true });
 document.addEventListener("keydown", handleReaderPageKeyboardShortcut, { capture: true });
+window.addEventListener("beforeunload", () => {
+  contentPageUnloading = true;
+  clearContentPortReconnectTimer();
+  contentPort?.disconnect();
+});
 
 void loadShortcutSettings();
 chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -461,4 +569,5 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   shortcutSettings = sanitizeShortcutSettings(changes[shortcutStorageKey]?.newValue);
 });
 
+connectContentPort();
 collectAndSendPageContext();

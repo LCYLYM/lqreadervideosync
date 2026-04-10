@@ -1,4 +1,8 @@
+import { createLogger } from "../shared/logger";
 import type { AimReadArticleSnapshot, ArticleParagraph } from "../shared/protocol";
+
+const logger = createLogger("article-snapshot");
+const ARTICLE_API_REQUEST_TIMEOUT_MS = 15000;
 
 interface AimReadArticleApiParagraph {
   paragraphIndex: number;
@@ -115,12 +119,28 @@ function normalizeParagraph(rawParagraph: unknown, currentPage: number | null): 
 
 async function fetchArticlePage(articleId: number, page: number, pageSize: number): Promise<AimReadArticleApiPayload> {
   const endpoint = `/api/articles/${articleId}/content/page?page=${page}&pageSize=${pageSize}`;
-  const response = await fetch(endpoint, {
-    credentials: "include",
-    headers: {
-      accept: "application/json"
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => {
+    controller.abort();
+  }, ARTICLE_API_REQUEST_TIMEOUT_MS);
+  let response: Response;
+
+  try {
+    response = await fetch(endpoint, {
+      credentials: "include",
+      headers: {
+        accept: "application/json"
+      },
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`文章接口请求超时 (${ARTICLE_API_REQUEST_TIMEOUT_MS}ms)`);
     }
-  });
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     throw new Error(`文章接口请求失败 (${response.status})`);
@@ -149,7 +169,18 @@ export async function collectArticleSnapshotFromApi(): Promise<AimReadArticleSna
   let currentPage = 1;
   let hasNext = true;
 
+  logger.info("Starting article snapshot collection from API", {
+    articleId,
+    categoryId,
+    articleUrl: window.location.href
+  });
+
   while (hasNext) {
+    logger.info("Fetching article snapshot page", {
+      articleId,
+      currentPage,
+      pageSize
+    });
     const payload = await fetchArticlePage(articleId, currentPage, pageSize);
     const pageInfo = isObject(payload.pageInfo) ? payload.pageInfo : null;
     const pageNumber = asNumber(pageInfo?.currentPage) ?? currentPage;
@@ -172,6 +203,14 @@ export async function collectArticleSnapshotFromApi(): Promise<AimReadArticleSna
     totalPages = totalPages ?? asNumber(pageInfo?.totalPages);
     totalElements = totalElements ?? asNumber(pageInfo?.totalElements);
 
+    logger.info("Fetched article snapshot page", {
+      articleId,
+      currentPage: pageNumber,
+      paragraphCount: normalizedParagraphs.length,
+      totalPages,
+      totalElements
+    });
+
     if (totalPages !== null && currentPage >= totalPages) {
       hasNext = false;
     } else if (typeof pageInfo?.hasNext === "boolean") {
@@ -190,6 +229,13 @@ export async function collectArticleSnapshotFromApi(): Promise<AimReadArticleSna
   if (paragraphs.length === 0) {
     throw new Error("文章接口返回为空，无法构建完整段落快照。");
   }
+
+  logger.info("Collected article snapshot from API", {
+    articleId,
+    paragraphCount: paragraphs.length,
+    totalPages,
+    totalElements: totalElements ?? paragraphs.length
+  });
 
   return {
     articleUrl: window.location.href,
@@ -319,6 +365,12 @@ export async function collectArticleSnapshotByAutoScroll(): Promise<AimReadArtic
   let stableRounds = 0;
   let previousCount = 0;
 
+  logger.info("Starting article snapshot collection by auto scroll", {
+    articleId,
+    categoryId,
+    articleUrl: window.location.href
+  });
+
   try {
     for (let round = 0; round < 24; round += 1) {
       const visibleParagraphs = collectVisibleParagraphsFromDom();
@@ -359,6 +411,11 @@ export async function collectArticleSnapshotByAutoScroll(): Promise<AimReadArtic
     throw new Error("懒加载补齐失败，没有抓到可用段落。");
   }
 
+  logger.info("Collected article snapshot by auto scroll", {
+    articleId,
+    paragraphCount: paragraphs.length
+  });
+
   return {
     articleUrl: window.location.href,
     articleId,
@@ -373,7 +430,10 @@ export async function collectArticleSnapshotByAutoScroll(): Promise<AimReadArtic
 export async function collectCompleteArticleSnapshot(): Promise<AimReadArticleSnapshot> {
   try {
     return await collectArticleSnapshotFromApi();
-  } catch {
+  } catch (error) {
+    logger.warn("Article snapshot API collection failed, falling back to auto scroll", {
+      message: error instanceof Error ? error.message : String(error)
+    });
     return collectArticleSnapshotByAutoScroll();
   }
 }
