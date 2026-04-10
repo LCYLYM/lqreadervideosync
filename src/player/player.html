@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reader Sync By 🐟</title>
+    <link rel="stylesheet" href="./player.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="panel hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Reader Sync By 🐟</p>
+          <h1>本地播放器与 aim-read 实页同步</h1>
+          <p class="hero-description">
+            打开一个已登录的 aim-read 阅读页，拖入本地视频和字幕，再在下拉框里手动绑定目标页面，扩展就会自动抓取全文、完成运行时匹配，并把播放器和阅读页双向联动起来。
+          </p>
+        </div>
+        <div class="hero-actions">
+          <button id="request-page-context" type="button">刷新页面数据</button>
+          <button id="export-page-context" type="button" hidden disabled>导出段落快照 JSON</button>
+          <button id="pip-toggle" type="button">画中画</button>
+        </div>
+      </section>
+
+      <section class="panel grid intake-panel">
+        <div class="field-group">
+          <label for="video-file">本地视频文件</label>
+          <input id="video-file" type="file" accept="video/*" />
+          <p id="video-file-status" class="field-selection-status">未选择任何文件</p>
+        </div>
+        <div class="field-group">
+          <label for="subtitle-file">字幕文件</label>
+          <input id="subtitle-file" type="file" accept=".ass,.ssa,.srt,.vtt,text/plain" />
+          <p id="subtitle-file-status" class="field-selection-status">未选择任何文件</p>
+        </div>
+        <div class="field-group binding-field">
+          <label for="page-tab-select">阅读页绑定</label>
+          <select id="page-tab-select">
+            <option value="">等待页面连接</option>
+          </select>
+          <div class="field-actions">
+            <button id="refresh-connected-tabs" type="button">刷新页面列表</button>
+            <button id="bind-selected-page" type="button" disabled>绑定所选页面</button>
+          </div>
+          <p id="connected-tabs-status" class="field-selection-status">当前还没有可绑定的页面。</p>
+        </div>
+        <div class="field-group grow">
+          <label for="player-status-note">当前流程</label>
+          <div id="player-status-note" class="field-note">
+            1. 先打开要同步的 reader 页面 2. 拖入视频和字幕 3. 在“阅读页绑定”中手动选定目标 4. 扩展自动抓全文并匹配
+          </div>
+        </div>
+      </section>
+
+      <section id="drop-zone" class="panel drop-panel">
+        <div>
+          <p class="eyebrow">直接拖入</p>
+          <h2>把视频和字幕直接拖到这里</h2>
+          <p class="inline-status">
+            拖入 `.mp4/.mkv` 会装载本地视频，拖入 `.ass/.ssa/.srt/.vtt` 会自动解析字幕，并向当前 reader 页面拉取全文做运行时匹配。
+          </p>
+        </div>
+      </section>
+
+      <section class="panel player-panel">
+        <video id="video" controls playsinline preload="metadata"></video>
+        <div class="transport" hidden>
+          <button id="play-toggle" type="button">播放</button>
+          <label class="transport-time" for="seek-range">
+            <span id="current-time">00:00.000</span>
+            <input id="seek-range" type="range" min="0" max="1000" value="0" />
+            <span id="duration-time">00:00.000</span>
+          </label>
+          <label class="rate-control" for="playback-rate">
+            倍速
+            <select id="playback-rate">
+              <option value="0.5">0.5x</option>
+              <option value="0.75">0.75x</option>
+              <option value="1" selected>1.0x</option>
+              <option value="1.25">1.25x</option>
+              <option value="1.5">1.5x</option>
+              <option value="1.75">1.75x</option>
+              <option value="2">2.0x</option>
+            </select>
+          </label>
+        </div>
+        <p class="transport-hint">当前使用浏览器原生播放器控件；快捷键仍会同时作用在播放器页和 reader 页。</p>
+      </section>
+
+      <section class="panel preprocess-panel">
+        <div class="log-header">
+          <h2>视频兼容与预处理</h2>
+          <p>扩展已内置本地 FFmpeg Core。拖入视频后会先探测真实流信息，再决定是直接进入原生播放器还是一键预处理。</p>
+        </div>
+        <div class="preprocess-grid">
+          <article class="preprocess-card">
+            <span class="preview-label">检测状态</span>
+            <strong id="video-compatibility-status">等待视频输入</strong>
+            <p id="video-compatibility-summary" class="preview-text">检测基于真实容器、视频流和音频流，不依赖文件名或扩展名猜测。</p>
+          </article>
+          <article class="preprocess-card">
+            <span class="preview-label">实际流信息</span>
+            <strong id="video-probe-detail">-</strong>
+            <p id="video-transcode-plan" class="preview-text">尚未生成预处理计划。</p>
+          </article>
+          <article class="preprocess-card">
+            <span class="preview-label">预处理进度</span>
+            <strong id="video-processing-status">待命</strong>
+            <div class="progress-cluster">
+              <progress id="video-processing-progress-bar" max="100" value="0"></progress>
+              <span id="video-processing-progress">0%</span>
+            </div>
+            <p id="video-processing-note" class="preview-text">如果文件偏离推荐的 HVC1 + AAC 基线，可以直接试播，也可以一键预处理后播放。</p>
+          </article>
+        </div>
+        <div class="preprocess-actions">
+          <button id="play-original-video" type="button" disabled>无视风险直接播放</button>
+          <button id="preprocess-video" type="button" disabled>转码预处理后播放</button>
+          <button id="play-processed-video" type="button" disabled>播放转码结果</button>
+          <button id="download-processed-video" type="button" disabled>下载转码结果</button>
+        </div>
+      </section>
+
+      <section class="panel shortcut-panel">
+        <div class="log-header">
+          <h2>快捷键设置</h2>
+          <p>播放器页和 reader 页共用同一组快捷键。</p>
+        </div>
+        <div class="shortcut-grid">
+          <div class="field-group">
+            <label for="shortcut-toggle-play">播放/暂停</label>
+            <input id="shortcut-toggle-play" type="text" placeholder="Space" />
+          </div>
+          <div class="field-group">
+            <label for="shortcut-seek-backward">后退键</label>
+            <input id="shortcut-seek-backward" type="text" placeholder="ArrowLeft" />
+          </div>
+          <div class="field-group">
+            <label for="shortcut-seek-forward">前进键</label>
+            <input id="shortcut-seek-forward" type="text" placeholder="ArrowRight" />
+          </div>
+          <div class="field-group">
+            <label for="shortcut-rate-down">降速键</label>
+            <input id="shortcut-rate-down" type="text" placeholder="KeyZ" />
+          </div>
+          <div class="field-group">
+            <label for="shortcut-rate-up">加速键</label>
+            <input id="shortcut-rate-up" type="text" placeholder="KeyX" />
+          </div>
+          <div class="field-group">
+            <label for="shortcut-seek-seconds">快进快退秒数</label>
+            <input id="shortcut-seek-seconds" type="number" min="1" max="60" value="5" />
+          </div>
+          <div class="field-group">
+            <label>&nbsp;</label>
+            <button id="save-shortcuts" type="button">保存快捷键</button>
+          </div>
+        </div>
+      </section>
+
+
+      <section class="panel status-grid">
+        <article>
+          <h2>播放器状态</h2>
+          <dl>
+            <div>
+              <dt>视频文件</dt>
+              <dd id="video-name">未加载</dd>
+            </div>
+            <div>
+              <dt>字幕文件</dt>
+              <dd id="subtitle-name">未加载</dd>
+            </div>
+            <div>
+              <dt>运行时匹配</dt>
+              <dd id="manifest-name">未加载</dd>
+            </div>
+            <div>
+              <dt>字幕匹配状态</dt>
+              <dd id="subtitle-status">未加载字幕。</dd>
+            </div>
+            <div>
+              <dt>匹配进度</dt>
+              <dd class="matching-progress-cell">
+                <progress id="matching-progress-bar" max="100" value="0"></progress>
+                <span id="matching-progress">待命</span>
+              </dd>
+            </div>
+            <div>
+              <dt>播放状态</dt>
+              <dd id="playback-state">idle</dd>
+            </div>
+            <div>
+              <dt>当前段落</dt>
+              <dd id="active-paragraph">-</dd>
+            </div>
+            <div>
+              <dt>映射覆盖</dt>
+              <dd id="sync-coverage">-</dd>
+            </div>
+            <div>
+              <dt>匹配来源</dt>
+              <dd id="manifest-source">-</dd>
+            </div>
+          </dl>
+        </article>
+        <article>
+          <h2>当前页面</h2>
+          <dl>
+            <div>
+              <dt>绑定状态</dt>
+              <dd id="binding-status">等待页面连接</dd>
+            </div>
+            <div>
+              <dt>匹配检查</dt>
+              <dd id="page-match-status">-</dd>
+            </div>
+            <div>
+              <dt>文章标题</dt>
+              <dd id="page-title">未检测</dd>
+            </div>
+            <div>
+              <dt>文章 URL</dt>
+              <dd id="page-url-display">-</dd>
+            </div>
+            <div>
+              <dt>可见段落数</dt>
+              <dd id="page-paragraph-count">0</dd>
+            </div>
+          </dl>
+        </article>
+      </section>
+
+      <section class="panel sync-preview-panel">
+        <div class="sync-preview-copy">
+          <h2>当前同步预览</h2>
+          <p>这里会展示当前时间命中的 transcript 片段、文章段落和对齐置信度，便于快速判断同步质量。</p>
+        </div>
+        <div class="sync-preview-grid">
+          <article class="preview-card">
+            <header>
+              <span class="preview-label">Transcript</span>
+              <strong id="current-sync-segments">-</strong>
+            </header>
+            <p id="current-transcript-preview" class="preview-text">等待同步清单和视频。</p>
+          </article>
+          <article class="preview-card">
+            <header>
+              <span class="preview-label">Article</span>
+              <strong id="current-sync-range">-</strong>
+            </header>
+            <p id="current-article-preview" class="preview-text">等待当前页面快照。</p>
+          </article>
+          <article class="preview-card preview-meta">
+            <header>
+              <span class="preview-label">对齐质量</span>
+              <strong id="current-sync-score">-</strong>
+            </header>
+            <p id="current-sync-note" class="preview-text">
+              当前无可展示映射。加载视频与同步清单后会自动更新。
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel sync-nearby-panel">
+        <div class="log-header">
+          <h2>附近同步段落</h2>
+          <p>点击任一条可直接跳转视频。</p>
+        </div>
+        <div id="sync-nearby-list" class="sync-nearby-list"></div>
+      </section>
+
+      <section class="panel log-panel">
+        <div class="log-header">
+          <h2>运行日志</h2>
+          <p id="status-text">等待输入。</p>
+        </div>
+        <pre id="log-output" class="log-output"></pre>
+      </section>
+
+      <footer class="page-footer">
+        <span>©️生🐟</span>
+        <a href="https://github.com/LCYLYM/lqreadervideosync" target="_blank" rel="noreferrer">https://github.com/LCYLYM/lqreadervideosync</a>
+      </footer>
+    </main>
+
+    <script type="module" src="./player.js"></script>
+  </body>
+</html>

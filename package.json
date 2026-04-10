@@ -1,0 +1,39 @@
+{
+  "name": "lqreadervideosync",
+  "version": "0.1.0",
+  "description": "A Chrome extension that syncs local episode videos and subtitle files with authenticated aim-read reader pages.",
+  "type": "module",
+  "author": "生🐟",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LCYLYM/lqreadervideosync.git"
+  },
+  "homepage": "https://github.com/LCYLYM/lqreadervideosync",
+  "bugs": {
+    "url": "https://github.com/LCYLYM/lqreadervideosync/issues"
+  },
+  "keywords": [
+    "chrome-extension",
+    "subtitle-sync",
+    "video-player",
+    "aim-read",
+    "ffmpeg-wasm",
+    "reading-sync"
+  ],
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "check": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.294",
+    "esbuild": "^0.25.4",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@ffmpeg/core": "^0.12.10",
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2"
+  }
+}

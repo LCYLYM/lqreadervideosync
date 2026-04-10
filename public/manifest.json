@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "Reader Sync By 🐟",
+  "description": "Sync local episode videos and subtitle files with authenticated aim-read reader pages.",
+  "version": "0.1.0",
+  "homepage_url": "https://github.com/LCYLYM/lqreadervideosync",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://aim-read.top/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "cross_origin_opener_policy": {
+    "value": "same-origin"
+  },
+  "cross_origin_embedder_policy": {
+    "value": "require-corp"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  },
+  "action": {
+    "default_title": "Open Reader Sync By 🐟"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://aim-read.top/*"
+      ],
+      "js": [
+        "content/index.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "player/*",
+        "vendor/ffmpeg/*"
+      ],
+      "matches": [
+        "https://aim-read.top/*"
+      ]
+    }
+  ]
+}
