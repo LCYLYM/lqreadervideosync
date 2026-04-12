@@ -480,6 +480,12 @@ select:focus-visible {
   gap: 16px;
 }
 
+.player-panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .preprocess-grid,
 .shortcut-grid,
 .sync-preview-grid {
@@ -872,6 +878,129 @@ body {
   text-decoration: underline;
 }
 
+body.tutorial-open {
+  overflow-x: hidden;
+}
+
+[data-tutorial-active="true"] {
+  position: relative;
+  z-index: 2147483500;
+}
+
+[data-tutorial-active="true"]::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 26px;
+  border: 2px solid rgba(255, 245, 233, 0.96);
+  box-shadow:
+    0 0 0 6px rgba(201, 100, 66, 0.22),
+    0 18px 34px rgba(20, 20, 19, 0.18);
+  pointer-events: none;
+}
+
+.tutorial-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483600;
+  pointer-events: auto;
+}
+
+.tutorial-spotlight {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 160px;
+  height: 120px;
+  border-radius: 28px;
+  border: 2px solid rgba(255, 248, 241, 0.95);
+  background: transparent;
+  box-shadow:
+    0 0 0 9999px rgba(24, 20, 15, 0.62),
+    0 0 0 8px rgba(201, 100, 66, 0.16);
+  transition:
+    left 220ms ease,
+    top 220ms ease,
+    width 220ms ease,
+    height 220ms ease;
+}
+
+.tutorial-card {
+  position: fixed;
+  width: min(360px, calc(100vw - 32px));
+  padding: 18px 18px 16px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background:
+    linear-gradient(180deg, rgba(39, 31, 25, 0.98), rgba(28, 23, 20, 0.96)),
+    linear-gradient(180deg, rgba(201, 100, 66, 0.16), rgba(201, 100, 66, 0));
+  color: #fff9f2;
+  box-shadow: 0 28px 72px rgba(10, 8, 7, 0.46);
+  pointer-events: auto;
+}
+
+.tutorial-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.tutorial-step-counter {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 232, 214, 0.76);
+}
+
+.tutorial-close {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff9f2;
+  box-shadow: none;
+}
+
+.tutorial-close:hover {
+  box-shadow: none;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.tutorial-card h2 {
+  margin: 0 0 8px;
+  font-size: 24px;
+  line-height: 1.25;
+}
+
+.tutorial-description {
+  margin: 0;
+  color: rgba(255, 240, 227, 0.9);
+  font-size: 14px;
+}
+
+.tutorial-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+#tutorial-next {
+  min-width: 92px;
+  background: linear-gradient(180deg, #d87854 0%, #c96442 100%);
+  border-color: rgba(201, 100, 66, 0.3);
+  color: #fffdf9;
+  box-shadow: 0 12px 24px rgba(201, 100, 66, 0.18);
+}
+
+#tutorial-next:hover {
+  box-shadow: var(--shadow-float);
+}
+
 @keyframes panel-in {
   from {
     opacity: 0;
@@ -938,5 +1067,13 @@ body {
 
   .field-actions {
     flex-direction: column;
+  }
+
+  .player-panel-actions {
+    justify-content: stretch;
+  }
+
+  .tutorial-card {
+    width: calc(100vw - 24px);
   }
 }

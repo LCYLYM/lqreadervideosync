@@ -8,7 +8,7 @@
   </head>
   <body>
     <main class="app-shell">
-      <section class="panel hero">
+      <section id="tutorial-hero" class="panel hero">
         <div class="hero-copy">
           <p class="eyebrow">Reader Sync By 🐟</p>
           <h1>本地播放器与 aim-read 实页同步</h1>
@@ -17,6 +17,7 @@
           </p>
         </div>
         <div class="hero-actions">
+          <button id="open-tutorial" type="button">新手引导</button>
           <button id="request-page-context" type="button">刷新页面数据</button>
           <button id="export-page-context" type="button" hidden disabled>导出段落快照 JSON</button>
           <button id="pip-toggle" type="button">画中画</button>
@@ -24,17 +25,17 @@
       </section>
 
       <section class="panel grid intake-panel">
-        <div class="field-group">
+        <div id="video-file-field" class="field-group">
           <label for="video-file">本地视频文件</label>
           <input id="video-file" type="file" accept="video/*" />
           <p id="video-file-status" class="field-selection-status">未选择任何文件</p>
         </div>
-        <div class="field-group">
+        <div id="subtitle-file-field" class="field-group">
           <label for="subtitle-file">字幕文件</label>
           <input id="subtitle-file" type="file" accept=".ass,.ssa,.srt,.vtt,text/plain" />
           <p id="subtitle-file-status" class="field-selection-status">未选择任何文件</p>
         </div>
-        <div class="field-group binding-field">
+        <div id="binding-field" class="field-group binding-field">
           <label for="page-tab-select">阅读页绑定</label>
           <select id="page-tab-select">
             <option value="">等待页面连接</option>
@@ -63,32 +64,7 @@
         </div>
       </section>
 
-      <section class="panel player-panel">
-        <video id="video" controls playsinline preload="metadata"></video>
-        <div class="transport" hidden>
-          <button id="play-toggle" type="button">播放</button>
-          <label class="transport-time" for="seek-range">
-            <span id="current-time">00:00.000</span>
-            <input id="seek-range" type="range" min="0" max="1000" value="0" />
-            <span id="duration-time">00:00.000</span>
-          </label>
-          <label class="rate-control" for="playback-rate">
-            倍速
-            <select id="playback-rate">
-              <option value="0.5">0.5x</option>
-              <option value="0.75">0.75x</option>
-              <option value="1" selected>1.0x</option>
-              <option value="1.25">1.25x</option>
-              <option value="1.5">1.5x</option>
-              <option value="1.75">1.75x</option>
-              <option value="2">2.0x</option>
-            </select>
-          </label>
-        </div>
-        <p class="transport-hint">当前使用浏览器原生播放器控件；快捷键仍会同时作用在播放器页和 reader 页。</p>
-      </section>
-
-      <section class="panel preprocess-panel">
+      <section id="preprocess-panel" class="panel preprocess-panel">
         <div class="log-header">
           <h2>视频兼容与预处理</h2>
           <p>先探测真实音视频流，再决定直接播放还是只转需要处理的部分。</p>
@@ -120,6 +96,38 @@
           <button id="play-processed-video" type="button" disabled>播放转码结果</button>
           <button id="download-processed-video" type="button" disabled>下载转码结果</button>
         </div>
+      </section>
+
+      <section id="player-panel" class="panel player-panel">
+        <div class="log-header">
+          <h2>视频播放器</h2>
+          <p>视频兼容判断完成后，可以直接在这里播放、调整进度与倍速，并随时切到画中画。</p>
+        </div>
+        <video id="video" controls playsinline preload="metadata"></video>
+        <div class="player-panel-actions">
+          <button id="pip-toggle-player" type="button">画中画</button>
+        </div>
+        <div class="transport" hidden>
+          <button id="play-toggle" type="button">播放</button>
+          <label class="transport-time" for="seek-range">
+            <span id="current-time">00:00.000</span>
+            <input id="seek-range" type="range" min="0" max="1000" value="0" />
+            <span id="duration-time">00:00.000</span>
+          </label>
+          <label class="rate-control" for="playback-rate">
+            倍速
+            <select id="playback-rate">
+              <option value="0.5">0.5x</option>
+              <option value="0.75">0.75x</option>
+              <option value="1" selected>1.0x</option>
+              <option value="1.25">1.25x</option>
+              <option value="1.5">1.5x</option>
+              <option value="1.75">1.75x</option>
+              <option value="2">2.0x</option>
+            </select>
+          </label>
+        </div>
+        <p class="transport-hint">当前使用浏览器原生播放器控件；快捷键仍会同时作用在播放器页和 reader 页。</p>
       </section>
 
       <section class="panel shortcut-panel">
@@ -285,6 +293,21 @@
         <a href="https://github.com/LCYLYM/lqreadervideosync" target="_blank" rel="noreferrer">https://github.com/LCYLYM/lqreadervideosync</a>
       </footer>
     </main>
+
+    <div id="tutorial-overlay" class="tutorial-overlay" hidden aria-hidden="true">
+      <div id="tutorial-spotlight" class="tutorial-spotlight" aria-hidden="true"></div>
+      <section id="tutorial-card" class="tutorial-card" role="dialog" aria-modal="true" aria-labelledby="tutorial-title">
+        <div class="tutorial-card-top">
+          <p id="tutorial-step-counter" class="tutorial-step-counter">1 / 1</p>
+          <button id="tutorial-close" class="tutorial-close" type="button" aria-label="关闭新手引导">关闭</button>
+        </div>
+        <h2 id="tutorial-title">新手引导</h2>
+        <p id="tutorial-description" class="tutorial-description"></p>
+        <div class="tutorial-actions">
+          <button id="tutorial-next" type="button">下一步</button>
+        </div>
+      </section>
+    </div>
 
     <script type="module" src="./player.js"></script>
   </body>

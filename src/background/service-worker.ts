@@ -24,11 +24,13 @@ function wait(delayMs: number): Promise<void> {
   });
 }
 
-function postMessage(port: chrome.runtime.Port, message: RuntimeMessage): void {
+function postMessage(port: chrome.runtime.Port, message: RuntimeMessage): boolean {
   try {
     port.postMessage(message);
+    return true;
   } catch (error) {
     logger.warn("Port postMessage failed", error);
+    return false;
   }
 }
 
@@ -56,6 +58,21 @@ async function postMessageToReaderTab(tabId: number, message: RuntimeMessage): P
   }
 }
 
+async function tryPostMessageToReaderTab(tabId: number, message: RuntimeMessage): Promise<boolean> {
+  const port = contentPorts.get(tabId);
+  if (port) {
+    return postMessage(port, message);
+  }
+
+  try {
+    await chrome.tabs.sendMessage(tabId, message);
+    return true;
+  } catch (error) {
+    logger.warn("tabs.sendMessage failed", { tabId, type: message.type, error });
+    return false;
+  }
+}
+
 function broadcastToContent(message: RuntimeMessage, targetTabId: number | null): void {
   if (targetTabId !== null) {
     void postMessageToReaderTab(targetTabId, message);
@@ -79,6 +96,62 @@ async function getFallbackAimReadTabId(): Promise<number | null> {
     }
   }
   return null;
+}
+
+function isAimReadArticleUrl(url: string | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+  try {
+    const parsedUrl = new URL(url);
+    return /^\/daily-feed\/\d+/.test(parsedUrl.pathname);
+  } catch {
+    return false;
+  }
+}
+
+async function collectPageContextFromAllAimReadTabs(options?: { reloadUnresponsiveArticleTabs?: boolean }): Promise<{
+  candidateCount: number;
+  deliveredCount: number;
+  reloadedCount: number;
+}> {
+  const tabs = await chrome.tabs.query({
+    url: ["https://aim-read.top/*"]
+  });
+
+  let deliveredCount = 0;
+  let reloadedCount = 0;
+
+  await Promise.all(
+    tabs.map(async (tab) => {
+      if (typeof tab.id !== "number") {
+        return;
+      }
+
+      const delivered = await tryPostMessageToReaderTab(tab.id, { type: "COLLECT_PAGE_CONTEXT" });
+      if (delivered) {
+        deliveredCount += 1;
+        return;
+      }
+
+      if (!options?.reloadUnresponsiveArticleTabs || !isAimReadArticleUrl(tab.url)) {
+        return;
+      }
+
+      try {
+        await chrome.tabs.reload(tab.id);
+        reloadedCount += 1;
+      } catch (error) {
+        logger.warn("Failed to reload aim-read article tab during refresh", { tabId: tab.id, error });
+      }
+    })
+  );
+
+  return {
+    candidateCount: tabs.length,
+    deliveredCount,
+    reloadedCount
+  };
 }
 
 function getConnectedReaderTabIds(): number[] {
@@ -176,11 +249,19 @@ async function pushConnectedTabsSnapshot(): Promise<void> {
   });
 }
 
-async function refreshConnectedTabsState(port?: chrome.runtime.Port): Promise<void> {
-  if (contentPorts.size > 0) {
-    broadcastToContent({ type: "COLLECT_PAGE_CONTEXT" }, null);
-    await wait(140);
+async function refreshConnectedTabsState(
+  port?: chrome.runtime.Port,
+  options?: { reloadUnresponsiveArticleTabs?: boolean }
+): Promise<void> {
+  const refreshResult = await collectPageContextFromAllAimReadTabs({
+    reloadUnresponsiveArticleTabs: options?.reloadUnresponsiveArticleTabs === true
+  });
+
+  if (refreshResult.candidateCount > 0) {
+    await wait(refreshResult.reloadedCount > 0 ? 900 : 180);
   }
+
+  logger.info("Refreshed connected aim-read tabs", refreshResult);
 
   await pushConnectedTabsSnapshot();
   await pushActivePageContext(port);
@@ -271,6 +352,10 @@ async function handlePlayerMessage(port: chrome.runtime.Port, message: RuntimeMe
     }
     case "REQUEST_CONNECTED_TABS": {
       await refreshConnectedTabsState(port);
+      return;
+    }
+    case "REFRESH_READER_TABS": {
+      await refreshConnectedTabsState(port, { reloadUnresponsiveArticleTabs: true });
       return;
     }
     case "SET_PREFERRED_TAB": {

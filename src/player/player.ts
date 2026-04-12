@@ -76,7 +76,21 @@ interface ShortcutSettings {
   seekSeconds: number;
 }
 
+interface TutorialStep {
+  title: string;
+  description: string;
+  targetSelector: string;
+  spotlightPadding?: number;
+}
+
+interface TutorialStateRecord {
+  completedVersion: string | null;
+  dismissedVersion: string | null;
+}
+
 const shortcutStorageKey = "reader-sync-shortcut-settings";
+const tutorialStorageKey = "reader-sync-player-tutorial";
+const tutorialVersion = "2026-04-player-onboarding-v1";
 const defaultShortcutSettings: ShortcutSettings = {
   togglePlayback: "Space",
   seekBackward: "ArrowLeft",
@@ -85,6 +99,54 @@ const defaultShortcutSettings: ShortcutSettings = {
   rateUp: "KeyX",
   seekSeconds: 5
 };
+const defaultTutorialState: TutorialStateRecord = {
+  completedVersion: null,
+  dismissedVersion: null
+};
+const tutorialSteps: TutorialStep[] = [
+  {
+    title: "欢迎来到播放器页",
+    description: "这个播放器页会把本地视频、字幕和 aim-read 阅读页串起来。以后想再看一遍教程，点右上角“新手引导”就能重新打开。",
+    targetSelector: "#tutorial-hero",
+    spotlightPadding: 14
+  },
+  {
+    title: "先绑定阅读页",
+    description: "第一步先打开一个 aim-read 剧集文章页，然后在这里选择目标页面。列表不完整时，可以点“刷新页面列表”重新扫描并刷新文章页。",
+    targetSelector: "#binding-field",
+    spotlightPadding: 12
+  },
+  {
+    title: "也可以直接拖入",
+    description: "如果你更习惯拖拽，可以把视频和字幕直接拖到这个区域。视频会自动装载，字幕会立即进入运行时匹配流程。",
+    targetSelector: "#drop-zone",
+    spotlightPadding: 14
+  },
+  {
+    title: "手动导入本地视频",
+    description: "除了拖拽，也可以从这里选择本地视频文件。视频导入后，下面的兼容与预处理区域会先检查真实音视频流。",
+    targetSelector: "#video-file-field",
+    spotlightPadding: 12
+  },
+  {
+    title: "再导入字幕文件",
+    description: "字幕支持 ass、ssa、srt 和 vtt。导入后，扩展会自动抓全文文章并生成运行时同步清单。",
+    targetSelector: "#subtitle-file-field",
+    spotlightPadding: 12
+  },
+  {
+    title: "先看兼容与预处理",
+    description: "这里会判断当前文件能否直接播。如果浏览器对视频或音轨兼容性不好，可以先预处理，再切回播放器。",
+    targetSelector: "#preprocess-panel",
+    spotlightPadding: 14
+  },
+  {
+    title: "最后就在这里播放",
+    description: "播放器区可以直接调进度、改倍速和切画中画。完成前面几步后，阅读页和视频就会开始双向同步。",
+    targetSelector: "#player-panel",
+    spotlightPadding: 14
+  }
+];
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -96,6 +158,14 @@ function requireElement<T extends Element>(selector: string): T {
 
 function queryOptionalElement<T extends Element>(selector: string): T | null {
   return document.querySelector<T>(selector);
+}
+
+function isEventFromVideoElement(event: KeyboardEvent): boolean {
+  if (event.target === elements.video || document.activeElement === elements.video) {
+    return true;
+  }
+
+  return event.composedPath().includes(elements.video);
 }
 
 const elements = {
@@ -118,7 +188,9 @@ const elements = {
   bindSelectedPageButton: requireElement<HTMLButtonElement>("#bind-selected-page"),
   connectedTabsStatus: requireElement<HTMLElement>("#connected-tabs-status"),
   exportPageContextButton: requireElement<HTMLButtonElement>("#export-page-context"),
+  openTutorialButton: requireElement<HTMLButtonElement>("#open-tutorial"),
   pipToggle: requireElement<HTMLButtonElement>("#pip-toggle"),
+  pipTogglePlayer: requireElement<HTMLButtonElement>("#pip-toggle-player"),
   playToggle: requireElement<HTMLButtonElement>("#play-toggle"),
   seekRange: requireElement<HTMLInputElement>("#seek-range"),
   playbackRate: requireElement<HTMLSelectElement>("#playback-rate"),
@@ -167,7 +239,15 @@ const elements = {
   syncNearbyList: requireElement<HTMLElement>("#sync-nearby-list"),
   dropZone: requireElement<HTMLElement>("#drop-zone"),
   statusText: requireElement<HTMLElement>("#status-text"),
-  logOutput: requireElement<HTMLElement>("#log-output")
+  logOutput: requireElement<HTMLElement>("#log-output"),
+  tutorialOverlay: requireElement<HTMLElement>("#tutorial-overlay"),
+  tutorialSpotlight: requireElement<HTMLElement>("#tutorial-spotlight"),
+  tutorialCard: requireElement<HTMLElement>("#tutorial-card"),
+  tutorialStepCounter: requireElement<HTMLElement>("#tutorial-step-counter"),
+  tutorialTitle: requireElement<HTMLElement>("#tutorial-title"),
+  tutorialDescription: requireElement<HTMLElement>("#tutorial-description"),
+  tutorialClose: requireElement<HTMLButtonElement>("#tutorial-close"),
+  tutorialNext: requireElement<HTMLButtonElement>("#tutorial-next")
 };
 
 elements.video.controls = true;
@@ -215,6 +295,11 @@ let playerPortReconnectTimer: number | null = null;
 let playerPageUnloading = false;
 let pageContextTabResolutionInFlight: Promise<void> | null = null;
 let pageContextTabResolutionKey: string | null = null;
+let tutorialState: TutorialStateRecord = { ...defaultTutorialState };
+let tutorialActive = false;
+let tutorialStepIndex = 0;
+let tutorialActiveTarget: HTMLElement | null = null;
+let tutorialPositionTimer: number | null = null;
 
 function clearPlayerPortReconnectTimer(): void {
   if (playerPortReconnectTimer !== null) {
@@ -609,6 +694,192 @@ async function loadShortcutSettings(): Promise<void> {
   applyShortcutSettingsToInputs(shortcutSettings);
 }
 
+function sanitizeTutorialState(rawValue: unknown): TutorialStateRecord {
+  if (!isObject(rawValue)) {
+    return { ...defaultTutorialState };
+  }
+
+  return {
+    completedVersion: typeof rawValue.completedVersion === "string" ? rawValue.completedVersion : null,
+    dismissedVersion: typeof rawValue.dismissedVersion === "string" ? rawValue.dismissedVersion : null
+  };
+}
+
+async function loadTutorialState(): Promise<void> {
+  const stored = await chrome.storage.local.get(tutorialStorageKey);
+  tutorialState = sanitizeTutorialState(stored[tutorialStorageKey]);
+}
+
+async function persistTutorialState(nextState: TutorialStateRecord): Promise<void> {
+  tutorialState = nextState;
+  await chrome.storage.local.set({
+    [tutorialStorageKey]: tutorialState
+  });
+}
+
+function shouldAutoOpenTutorial(): boolean {
+  return tutorialState.completedVersion !== tutorialVersion && tutorialState.dismissedVersion !== tutorialVersion;
+}
+
+function clearTutorialPositionTimer(): void {
+  if (tutorialPositionTimer !== null) {
+    window.clearTimeout(tutorialPositionTimer);
+    tutorialPositionTimer = null;
+  }
+}
+
+function clearTutorialTargetHighlight(): void {
+  if (!tutorialActiveTarget) {
+    return;
+  }
+  tutorialActiveTarget.removeAttribute("data-tutorial-active");
+  tutorialActiveTarget = null;
+}
+
+function resolveTutorialTarget(step: TutorialStep): HTMLElement | null {
+  return document.querySelector<HTMLElement>(step.targetSelector);
+}
+
+function highlightTutorialTarget(target: HTMLElement | null): void {
+  if (tutorialActiveTarget === target) {
+    return;
+  }
+
+  clearTutorialTargetHighlight();
+  if (!target) {
+    return;
+  }
+
+  target.setAttribute("data-tutorial-active", "true");
+  tutorialActiveTarget = target;
+}
+
+function queueTutorialPositionUpdate(delayMs = 0): void {
+  clearTutorialPositionTimer();
+  tutorialPositionTimer = window.setTimeout(() => {
+    tutorialPositionTimer = null;
+    positionTutorialOverlay();
+  }, delayMs);
+}
+
+function positionTutorialOverlay(): void {
+  if (!tutorialActive) {
+    return;
+  }
+
+  const step = tutorialSteps[tutorialStepIndex];
+  const target = resolveTutorialTarget(step);
+  if (!target) {
+    return;
+  }
+
+  const rect = target.getBoundingClientRect();
+  const spotlightPadding = step.spotlightPadding ?? 12;
+  const spotlightLeft = clamp(rect.left - spotlightPadding, 8, Math.max(8, window.innerWidth - 24));
+  const spotlightTop = clamp(rect.top - spotlightPadding, 8, Math.max(8, window.innerHeight - 24));
+  const spotlightWidth = Math.min(rect.width + spotlightPadding * 2, window.innerWidth - spotlightLeft - 8);
+  const spotlightHeight = Math.min(rect.height + spotlightPadding * 2, window.innerHeight - spotlightTop - 8);
+
+  Object.assign(elements.tutorialSpotlight.style, {
+    left: `${spotlightLeft}px`,
+    top: `${spotlightTop}px`,
+    width: `${Math.max(spotlightWidth, 120)}px`,
+    height: `${Math.max(spotlightHeight, 76)}px`
+  });
+
+  const cardRect = elements.tutorialCard.getBoundingClientRect();
+  const viewportPadding = 16;
+  const cardWidth = cardRect.width || Math.min(360, window.innerWidth - viewportPadding * 2);
+  const cardHeight = cardRect.height || 220;
+  const spaceBelow = window.innerHeight - rect.bottom;
+  const cardTop =
+    spaceBelow >= cardHeight + 28
+      ? rect.bottom + 18
+      : Math.max(viewportPadding, rect.top - cardHeight - 18);
+  const cardLeft = clamp(rect.left, viewportPadding, Math.max(viewportPadding, window.innerWidth - cardWidth - viewportPadding));
+
+  Object.assign(elements.tutorialCard.style, {
+    left: `${cardLeft}px`,
+    top: `${cardTop}px`
+  });
+}
+
+function renderTutorialStep(options?: { scroll?: boolean }): void {
+  if (!tutorialActive) {
+    return;
+  }
+
+  const step = tutorialSteps[tutorialStepIndex];
+  const target = resolveTutorialTarget(step);
+  highlightTutorialTarget(target);
+
+  elements.tutorialStepCounter.textContent = `${tutorialStepIndex + 1} / ${tutorialSteps.length}`;
+  elements.tutorialTitle.textContent = step.title;
+  elements.tutorialDescription.textContent = step.description;
+  elements.tutorialNext.textContent = tutorialStepIndex === tutorialSteps.length - 1 ? "完成" : "下一步";
+
+  if (target && options?.scroll !== false) {
+    target.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+      inline: "nearest"
+    });
+  }
+
+  positionTutorialOverlay();
+  if (target && options?.scroll !== false) {
+    queueTutorialPositionUpdate(260);
+  }
+}
+
+function hideTutorialOverlay(): void {
+  tutorialActive = false;
+  clearTutorialPositionTimer();
+  clearTutorialTargetHighlight();
+  elements.tutorialOverlay.hidden = true;
+  elements.tutorialOverlay.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("tutorial-open");
+}
+
+async function dismissTutorial(): Promise<void> {
+  const nextState =
+    tutorialState.completedVersion === tutorialVersion
+      ? tutorialState
+      : {
+          ...tutorialState,
+          dismissedVersion: tutorialVersion
+        };
+  await persistTutorialState(nextState);
+  hideTutorialOverlay();
+}
+
+async function completeTutorial(): Promise<void> {
+  await persistTutorialState({
+    completedVersion: tutorialVersion,
+    dismissedVersion: null
+  });
+  hideTutorialOverlay();
+}
+
+function openTutorial(options?: { startIndex?: number; scroll?: boolean }): void {
+  tutorialStepIndex = clamp(options?.startIndex ?? 0, 0, tutorialSteps.length - 1);
+  tutorialActive = true;
+  elements.tutorialOverlay.hidden = false;
+  elements.tutorialOverlay.setAttribute("aria-hidden", "false");
+  document.body.classList.add("tutorial-open");
+  renderTutorialStep({ scroll: options?.scroll !== false });
+}
+
+function advanceTutorial(): void {
+  if (tutorialStepIndex >= tutorialSteps.length - 1) {
+    void completeTutorial();
+    return;
+  }
+
+  tutorialStepIndex += 1;
+  renderTutorialStep({ scroll: true });
+}
+
 function currentPlaybackState(): PlaybackState {
   if (elements.video.error) {
     return "error";
@@ -645,14 +916,19 @@ function updatePlayToggle(): void {
 }
 
 function updatePictureInPictureButton(): void {
+  const pictureInPictureButtons = [elements.pipToggle, elements.pipTogglePlayer];
   if (!document.pictureInPictureEnabled) {
-    elements.pipToggle.disabled = true;
-    elements.pipToggle.textContent = "画中画不可用";
+    for (const button of pictureInPictureButtons) {
+      button.disabled = true;
+      button.textContent = "画中画不可用";
+    }
     return;
   }
   const activePiP = document.pictureInPictureElement === elements.video;
-  elements.pipToggle.disabled = false;
-  elements.pipToggle.textContent = activePiP ? "退出画中画" : "画中画";
+  for (const button of pictureInPictureButtons) {
+    button.disabled = false;
+    button.textContent = activePiP ? "退出画中画" : "画中画";
+  }
 }
 
 function setPlaybackRate(rate: number, source: "player" | "reader-page"): void {
@@ -2467,6 +2743,11 @@ function requestConnectedTabs(): void {
   postRuntimeMessage({ type: "REQUEST_CONNECTED_TABS" } satisfies RuntimeMessage);
 }
 
+function refreshReaderTabs(): void {
+  setConnectedTabsStatus("正在扫描所有 aim-read 页面，必要时会刷新文章页…");
+  postRuntimeMessage({ type: "REFRESH_READER_TABS" } satisfies RuntimeMessage);
+}
+
 function bindSelectedPage(): void {
   const tabId = Number.parseInt(elements.pageTabSelect.value, 10);
   if (!Number.isFinite(tabId)) {
@@ -2613,7 +2894,7 @@ elements.requestPageContextButton.addEventListener("click", () => {
 });
 
 elements.refreshConnectedTabsButton.addEventListener("click", () => {
-  requestConnectedTabs();
+  refreshReaderTabs();
 });
 
 elements.pageTabSelect.addEventListener("change", () => {
@@ -2654,6 +2935,28 @@ elements.pipToggle.addEventListener("click", async () => {
     setStatus(message);
     appendLog("画中画切换失败", { message });
   }
+});
+
+elements.pipTogglePlayer.addEventListener("click", async () => {
+  try {
+    await togglePictureInPicture();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setStatus(message);
+    appendLog("播放器区画中画切换失败", { message });
+  }
+});
+
+elements.openTutorialButton.addEventListener("click", () => {
+  openTutorial({ scroll: true });
+});
+
+elements.tutorialClose.addEventListener("click", () => {
+  void dismissTutorial();
+});
+
+elements.tutorialNext.addEventListener("click", () => {
+  advanceTutorial();
 });
 
 elements.playToggle.addEventListener("click", async () => {
@@ -2725,11 +3028,22 @@ elements.dropZone.addEventListener("drop", (event) => {
 });
 
 window.addEventListener("keydown", async (event) => {
+  if (tutorialActive) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      void dismissTutorial();
+    }
+    return;
+  }
+
   if (isEditableTarget(event.target) || event.isComposing) {
     return;
   }
 
   if (matchesConfiguredShortcut(event, shortcutSettings.togglePlayback)) {
+    if (isEventFromVideoElement(event)) {
+      return;
+    }
     event.preventDefault();
     await togglePlayback().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
@@ -2874,8 +3188,19 @@ setStatus("等待输入。");
 connectPlayerPort();
 requestConnectedTabs();
 postRuntimeMessage({ type: "REQUEST_ACTIVE_PAGE_CONTEXT" } satisfies RuntimeMessage);
+window.addEventListener("resize", () => {
+  if (tutorialActive) {
+    queueTutorialPositionUpdate();
+  }
+});
+window.addEventListener("scroll", () => {
+  if (tutorialActive) {
+    queueTutorialPositionUpdate();
+  }
+}, { passive: true });
 window.addEventListener("beforeunload", () => {
   playerPageUnloading = true;
+  clearTutorialPositionTimer();
   if (videoObjectUrl) {
     URL.revokeObjectURL(videoObjectUrl);
   }
@@ -2889,6 +3214,17 @@ window.addEventListener("beforeunload", () => {
 void loadShortcutSettings().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   appendLog("读取快捷键设置失败", { message });
+});
+void loadTutorialState().then(() => {
+  if (shouldAutoOpenTutorial()) {
+    window.setTimeout(() => {
+      openTutorial({ scroll: true });
+    }, 420);
+  }
+}).catch((error: unknown) => {
+  appendLog("读取新手引导状态失败", {
+    message: error instanceof Error ? error.message : String(error)
+  });
 });
 
 if (searchParameters.get("autofetch") === "1") {

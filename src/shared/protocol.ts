@@ -183,6 +183,10 @@ export interface RequestConnectedTabsMessage {
   type: "REQUEST_CONNECTED_TABS";
 }
 
+export interface RefreshReaderTabsMessage {
+  type: "REFRESH_READER_TABS";
+}
+
 export interface ConnectedTabsResponseMessage {
   type: "CONNECTED_TABS_RESPONSE";
   payload: {
@@ -211,6 +215,7 @@ export type RuntimeMessage =
   | PlayerControlCommandMessage
   | PlayerSeekCommandMessage
   | PlayerStateUpdateMessage
+  | RefreshReaderTabsMessage
   | RequestActiveArticleSnapshotMessage
   | RequestConnectedTabsMessage
   | RequestActivePageContextMessage
