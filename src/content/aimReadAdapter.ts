@@ -14,6 +14,7 @@ interface StatusOverlayElements {
   dockedParagraphTag: HTMLElement;
   dockedStateText: HTMLElement;
   expandedCard: HTMLDivElement;
+  expandedCollapseButton: HTMLButtonElement;
   expandedLabel: HTMLElement;
   expandedStatePill: HTMLElement;
   expandedTitle: HTMLDivElement;
@@ -309,6 +310,11 @@ function ensureStyle(): void {
       color: rgba(248, 241, 229, 0.82);
       line-height: 1.1;
       white-space: nowrap;
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-docked-body span::after {
+      content: " / 展开";
+      color: rgba(255, 232, 214, 0.64);
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-status-topline {
@@ -648,6 +654,7 @@ export class AimReadDomController {
     const collapseButton = document.createElement("button");
     collapseButton.type = "button";
     collapseButton.className = "reader-sync-overlay-toggle reader-sync-overlay-action";
+    collapseButton.textContent = "贴边";
     collapseButton.setAttribute("aria-expanded", "true");
     collapseButton.setAttribute("aria-label", "贴边收起 Reader Sync 同步状态");
     collapseButton.title = "贴边收起";
@@ -682,6 +689,7 @@ export class AimReadDomController {
       dockedParagraphTag,
       dockedStateText,
       expandedCard,
+      expandedCollapseButton: collapseButton,
       expandedLabel,
       expandedStatePill,
       expandedTitle,
@@ -785,6 +793,7 @@ export class AimReadDomController {
       dockedParagraphTag,
       dockedStateText,
       expandedCard,
+      expandedCollapseButton,
       expandedLabel,
       expandedStatePill,
       expandedTitle,
@@ -798,11 +807,14 @@ export class AimReadDomController {
     expandedCard.hidden = this.overlayMode !== "expanded";
 
     dockedToggle.setAttribute("aria-expanded", this.overlayMode === "expanded" ? "true" : "false");
+    dockedToggle.title = this.activeParagraphIndex === null ? "展开 Reader Sync 同步状态" : `展开 Reader Sync 同步状态（${activeParagraphLabel}）`;
     dockedParagraphTag.textContent = this.activeParagraphIndex === null ? "Sync" : activeParagraphLabel;
     dockedStateText.textContent = stateLabel;
+    dockedStateText.parentElement?.setAttribute("data-state", this.activeParagraphIndex === null ? "idle" : "ready");
 
     expandedLabel.textContent = "Reader Sync";
     expandedStatePill.textContent = stateLabel;
+    expandedCollapseButton.textContent = "贴边";
     expandedTitle.textContent = truncateText(this.currentTitle, 80);
     expandedCurrentParagraphValue.textContent = activeParagraphLabel;
     expandedCurrentParagraphLabel.textContent = "当前段落";

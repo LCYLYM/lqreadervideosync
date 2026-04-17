@@ -431,9 +431,8 @@ export async function collectCompleteArticleSnapshot(): Promise<AimReadArticleSn
   try {
     return await collectArticleSnapshotFromApi();
   } catch (error) {
-    logger.warn("Article snapshot API collection failed, falling back to auto scroll", {
-      message: error instanceof Error ? error.message : String(error)
-    });
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn(`Article snapshot API collection failed, falling back to auto scroll: ${message}`);
     return collectArticleSnapshotByAutoScroll();
   }
 }

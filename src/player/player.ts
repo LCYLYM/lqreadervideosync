@@ -307,6 +307,7 @@ let tutorialActiveTarget: HTMLElement | null = null;
 let tutorialPositionTimer: number | null = null;
 let themePreference: PlayerThemePreference = "system";
 const systemDarkModeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+let tutorialPreviouslyFocusedElement: HTMLElement | null = null;
 
 function clearPlayerPortReconnectTimer(): void {
   if (playerPortReconnectTimer !== null) {
@@ -905,9 +906,19 @@ function hideTutorialOverlay(): void {
   tutorialActive = false;
   clearTutorialPositionTimer();
   clearTutorialTargetHighlight();
+  if (elements.tutorialOverlay.contains(document.activeElement)) {
+    if (elements.openTutorialButton instanceof HTMLElement) {
+      elements.openTutorialButton.focus({ preventScroll: true });
+    } else {
+      (document.activeElement as HTMLElement | null)?.blur?.();
+    }
+  }
+  elements.tutorialOverlay.setAttribute("inert", "");
   elements.tutorialOverlay.hidden = true;
   elements.tutorialOverlay.setAttribute("aria-hidden", "true");
   document.body.classList.remove("tutorial-open");
+  tutorialPreviouslyFocusedElement?.focus?.({ preventScroll: true });
+  tutorialPreviouslyFocusedElement = null;
 }
 
 async function dismissTutorial(): Promise<void> {
@@ -933,10 +944,18 @@ async function completeTutorial(): Promise<void> {
 function openTutorial(options?: { startIndex?: number; scroll?: boolean }): void {
   tutorialStepIndex = clamp(options?.startIndex ?? 0, 0, tutorialSteps.length - 1);
   tutorialActive = true;
+  tutorialPreviouslyFocusedElement =
+    document.activeElement instanceof HTMLElement && !elements.tutorialOverlay.contains(document.activeElement)
+      ? document.activeElement
+      : null;
   elements.tutorialOverlay.hidden = false;
+  elements.tutorialOverlay.removeAttribute("inert");
   elements.tutorialOverlay.setAttribute("aria-hidden", "false");
   document.body.classList.add("tutorial-open");
   renderTutorialStep({ scroll: options?.scroll !== false });
+  window.setTimeout(() => {
+    elements.tutorialClose.focus({ preventScroll: true });
+  }, 0);
 }
 
 function advanceTutorial(): void {

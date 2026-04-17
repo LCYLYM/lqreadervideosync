@@ -39,6 +39,11 @@ let lastPlayerState: PlaybackState = "idle";
 let contentPort: chrome.runtime.Port | null = null;
 let contentPortReconnectTimer: number | null = null;
 let contentPageUnloading = false;
+let extensionContextInvalidated = false;
+
+function isRuntimeContextInvalidatedError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("Extension context invalidated");
+}
 
 function clearContentPortReconnectTimer(): void {
   if (contentPortReconnectTimer !== null) {
@@ -48,7 +53,7 @@ function clearContentPortReconnectTimer(): void {
 }
 
 function scheduleContentPortReconnect(delayMs = 280): void {
-  if (contentPortReconnectTimer !== null || contentPageUnloading) {
+  if (contentPortReconnectTimer !== null || contentPageUnloading || extensionContextInvalidated) {
     return;
   }
   contentPortReconnectTimer = window.setTimeout(() => {
@@ -73,8 +78,21 @@ function connectContentPort(): chrome.runtime.Port {
   if (contentPort) {
     return contentPort;
   }
+  if (extensionContextInvalidated) {
+    throw new Error("Extension context invalidated");
+  }
   clearContentPortReconnectTimer();
-  const nextPort = chrome.runtime.connect({ name: CONTENT_PORT_NAME });
+  let nextPort: chrome.runtime.Port;
+  try {
+    nextPort = chrome.runtime.connect({ name: CONTENT_PORT_NAME });
+  } catch (error) {
+    if (isRuntimeContextInvalidatedError(error)) {
+      extensionContextInvalidated = true;
+      contentPageUnloading = true;
+      logger.warn("Extension context invalidated, stopping content reconnect until page reload");
+    }
+    throw error;
+  }
   logger.info("Content port connected");
   contentPort = nextPort;
   nextPort.onMessage.addListener(handleRuntimeMessage);
@@ -89,7 +107,15 @@ function connectContentPort(): chrome.runtime.Port {
 
 function postRuntimeMessage(message: RuntimeMessage, options?: { retry?: boolean }): boolean {
   const retry = options?.retry !== false;
-  const targetPort = connectContentPort();
+  let targetPort: chrome.runtime.Port;
+  try {
+    targetPort = connectContentPort();
+  } catch (error) {
+    if (!isRuntimeContextInvalidatedError(error)) {
+      logger.warn("Content port connect failed", { type: message.type, error });
+    }
+    return false;
+  }
 
   try {
     targetPort.postMessage(message);
@@ -278,7 +304,7 @@ async function collectAndSendArticleSnapshot(articleUrl: string): Promise<void> 
       logger.debug("Skipping article snapshot collection on non-reader page", { articleUrl });
       return;
     }
-    logger.warn("Failed to collect full article snapshot", { message });
+    logger.warn(`Failed to collect full article snapshot: ${message}`);
     postRuntimeMessage({
       type: "ARTICLE_SNAPSHOT_ERROR",
       payload: { message }
@@ -577,5 +603,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   shortcutSettings = sanitizeShortcutSettings(changes[shortcutStorageKey]?.newValue);
 });
 
-connectContentPort();
+try {
+  connectContentPort();
+} catch (error) {
+  if (!isRuntimeContextInvalidatedError(error)) {
+    logger.warn("Initial content port connect failed", { error });
+  }
+}
 collectAndSendPageContext();
