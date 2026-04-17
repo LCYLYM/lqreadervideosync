@@ -3,8 +3,11 @@ import type { AimReadPageContext, ArticleParagraph, PlaybackState } from "../sha
 const MARKER_ATTRIBUTE = "data-reader-sync-paragraph-index";
 const STYLE_ELEMENT_ID = "reader-sync-style";
 const STATUS_OVERLAY_ID = "reader-sync-status-overlay";
+const OVERLAY_MODE_STORAGE_KEY = "reader-sync-reader-overlay-mode";
 const ANALYSIS_TRIGGER_LABEL = "段落解析";
 const ANALYSIS_EMPTY_HINT = "点击段落左侧 Sparkle 查看句子解析";
+
+type OverlayMode = "expanded" | "docked";
 
 function parseNumericQueryParameter(name: string): number | null {
   const value = new URL(window.location.href).searchParams.get(name);
@@ -143,6 +146,10 @@ function playbackStateLabel(state: PlaybackState | null): string {
   }
 }
 
+function sanitizeOverlayMode(rawValue: unknown): OverlayMode {
+  return rawValue === "docked" ? "docked" : "expanded";
+}
+
 function ensureStyle(): void {
   if (document.getElementById(STYLE_ELEMENT_ID)) {
     return;
@@ -169,26 +176,143 @@ function ensureStyle(): void {
       right: 16px;
       bottom: 18px;
       z-index: 2147483647;
-      width: min(320px, calc(100vw - 32px));
-      padding: 12px 14px;
-      border-radius: 16px;
-      background: rgba(28, 21, 12, 0.82);
       color: #f8f1e5;
-      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.2);
-      backdrop-filter: blur(12px);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      pointer-events: none;
+      transition:
+        right 180ms ease,
+        transform 180ms ease,
+        opacity 180ms ease;
+      pointer-events: auto;
     }
 
-    #${STATUS_OVERLAY_ID} .reader-sync-status-top {
+    #${STATUS_OVERLAY_ID}[data-overlay-mode="expanded"] {
+      width: min(320px, calc(100vw - 32px));
+    }
+
+    #${STATUS_OVERLAY_ID}[data-overlay-mode="docked"] {
+      right: -42px;
+      width: 96px;
+      height: 84px;
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-status-card,
+    #${STATUS_OVERLAY_ID} .reader-sync-overlay-toggle-docked {
+      border: 1px solid rgba(255, 248, 236, 0.12);
+      background:
+        radial-gradient(circle at top left, rgba(255, 196, 81, 0.14), transparent 30%),
+        linear-gradient(180deg, rgba(36, 28, 18, 0.92), rgba(24, 19, 13, 0.88));
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.2);
+      backdrop-filter: blur(12px);
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-status-card {
+      padding: 12px 14px;
+      border-radius: 16px;
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-status-card:hover {
+      transform: translateY(-1px);
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-overlay-toggle {
+      appearance: none;
+      border: none;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-overlay-toggle:focus-visible {
+      outline: 2px solid rgba(255, 196, 81, 0.7);
+      outline-offset: 3px;
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-overlay-toggle-docked {
+      width: 100%;
+      height: 100%;
+      padding: 12px 16px 12px 18px;
+      border-radius: 999px 0 0 999px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: flex-start;
+      transition:
+        transform 180ms ease,
+        box-shadow 180ms ease,
+        border-color 180ms ease;
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-overlay-toggle-docked:hover {
+      transform: translateX(-4px);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
+      border-color: rgba(255, 248, 236, 0.2);
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-docked-dot {
+      flex: 0 0 auto;
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: #7f8c8d;
+      box-shadow: 0 0 0 5px rgba(127, 140, 141, 0.16);
+    }
+
+    #${STATUS_OVERLAY_ID}[data-player-state="playing"] .reader-sync-docked-dot {
+      background: #4fe089;
+      box-shadow: 0 0 0 5px rgba(79, 224, 137, 0.16);
+    }
+
+    #${STATUS_OVERLAY_ID}[data-player-state="paused"] .reader-sync-docked-dot,
+    #${STATUS_OVERLAY_ID}[data-player-state="ended"] .reader-sync-docked-dot {
+      background: #ffc451;
+      box-shadow: 0 0 0 5px rgba(255, 196, 81, 0.16);
+    }
+
+    #${STATUS_OVERLAY_ID}[data-player-state="error"] .reader-sync-docked-dot {
+      background: #ff7b7b;
+      box-shadow: 0 0 0 5px rgba(255, 123, 123, 0.16);
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-docked-body {
+      display: grid;
+      gap: 2px;
+      text-align: left;
+      min-width: 0;
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-docked-body strong {
+      font-size: 13px;
+      font-weight: 700;
+      color: #fff8ec;
+      line-height: 1;
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-docked-body span {
+      font-size: 11px;
+      color: rgba(248, 241, 229, 0.82);
+      line-height: 1.1;
+      white-space: nowrap;
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-status-topline {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
       margin-bottom: 8px;
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-status-label {
       font-size: 12px;
       letter-spacing: 0.04em;
       text-transform: uppercase;
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-status-top {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-state-pill {
@@ -223,6 +347,26 @@ function ensureStyle(): void {
     #${STATUS_OVERLAY_ID}[data-player-state="error"] .reader-sync-state-pill::before {
       background: #ff7b7b;
       box-shadow: 0 0 0 4px rgba(255, 123, 123, 0.16);
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-overlay-action {
+      flex: 0 0 auto;
+      min-height: 32px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.09);
+      color: #fff8ec;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition:
+        background-color 160ms ease,
+        transform 160ms ease;
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-overlay-action:hover {
+      background: rgba(255, 255, 255, 0.16);
+      transform: translateY(-1px);
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-status-title {
@@ -316,10 +460,19 @@ export class AimReadDomController {
   private playerState: PlaybackState | null = null;
   private currentTitle = document.title;
   private visibleParagraphCount = 0;
+  private overlayMode: OverlayMode = "expanded";
 
   constructor() {
     ensureStyle();
     this.statusOverlay = this.ensureStatusOverlay();
+    void this.loadOverlayMode();
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== "local" || !(OVERLAY_MODE_STORAGE_KEY in changes)) {
+        return;
+      }
+      this.overlayMode = sanitizeOverlayMode(changes[OVERLAY_MODE_STORAGE_KEY]?.newValue);
+      this.renderStatusOverlay();
+    });
     this.renderStatusOverlay();
   }
 
@@ -428,8 +581,37 @@ export class AimReadDomController {
     const overlay = document.createElement("div");
     overlay.id = STATUS_OVERLAY_ID;
     overlay.setAttribute("aria-live", "polite");
+    overlay.dataset.overlayMode = this.overlayMode;
     document.documentElement.append(overlay);
     return overlay;
+  }
+
+  private async loadOverlayMode(): Promise<void> {
+    try {
+      const stored = await chrome.storage.local.get(OVERLAY_MODE_STORAGE_KEY);
+      this.overlayMode = sanitizeOverlayMode(stored[OVERLAY_MODE_STORAGE_KEY]);
+      this.renderStatusOverlay();
+    } catch {
+      this.overlayMode = "expanded";
+      this.renderStatusOverlay();
+    }
+  }
+
+  private async setOverlayMode(nextMode: OverlayMode): Promise<void> {
+    if (this.overlayMode === nextMode) {
+      return;
+    }
+
+    this.overlayMode = nextMode;
+    this.renderStatusOverlay();
+
+    try {
+      await chrome.storage.local.set({
+        [OVERLAY_MODE_STORAGE_KEY]: nextMode
+      });
+    } catch {
+      // Ignore storage errors and keep the in-memory preference for this page.
+    }
   }
 
   private syncActiveNode(scrollWhenNeeded = false): void {
@@ -489,18 +671,68 @@ export class AimReadDomController {
 
   private renderStatusOverlay(): void {
     this.statusOverlay.dataset.playerState = this.playerState ?? "idle";
+    this.statusOverlay.dataset.overlayMode = this.overlayMode;
     this.statusOverlay.replaceChildren();
+
+    if (this.overlayMode === "docked") {
+      const dockedToggle = document.createElement("button");
+      dockedToggle.type = "button";
+      dockedToggle.className = "reader-sync-overlay-toggle reader-sync-overlay-toggle-docked";
+      dockedToggle.setAttribute("aria-expanded", "false");
+      dockedToggle.setAttribute("aria-label", "展开 Reader Sync 同步状态");
+      dockedToggle.title = "展开同步状态";
+      dockedToggle.addEventListener("click", () => {
+        void this.setOverlayMode("expanded");
+      });
+
+      const dot = document.createElement("span");
+      dot.className = "reader-sync-docked-dot";
+      dot.setAttribute("aria-hidden", "true");
+
+      const body = document.createElement("span");
+      body.className = "reader-sync-docked-body";
+
+      const paragraphTag = document.createElement("strong");
+      paragraphTag.textContent = this.activeParagraphIndex === null ? "Sync" : `#${this.activeParagraphIndex}`;
+
+      const stateText = document.createElement("span");
+      stateText.textContent = playbackStateLabel(this.playerState);
+
+      body.append(paragraphTag, stateText);
+      dockedToggle.append(dot, body);
+      this.statusOverlay.append(dockedToggle);
+      return;
+    }
+
+    const card = document.createElement("div");
+    card.className = "reader-sync-status-card";
+
+    const topLine = document.createElement("div");
+    topLine.className = "reader-sync-status-topline";
 
     const topRow = document.createElement("div");
     topRow.className = "reader-sync-status-top";
 
     const label = document.createElement("span");
+    label.className = "reader-sync-status-label";
     label.textContent = "Reader Sync";
 
     const statePill = document.createElement("span");
     statePill.className = "reader-sync-state-pill";
     statePill.textContent = playbackStateLabel(this.playerState);
     topRow.append(label, statePill);
+
+    const collapseButton = document.createElement("button");
+    collapseButton.type = "button";
+    collapseButton.className = "reader-sync-overlay-toggle reader-sync-overlay-action";
+    collapseButton.textContent = "贴边";
+    collapseButton.setAttribute("aria-expanded", "true");
+    collapseButton.setAttribute("aria-label", "贴边收起 Reader Sync 同步状态");
+    collapseButton.title = "贴边收起";
+    collapseButton.addEventListener("click", () => {
+      void this.setOverlayMode("docked");
+    });
+    topLine.append(topRow, collapseButton);
 
     const title = document.createElement("div");
     title.className = "reader-sync-status-title";
@@ -524,6 +756,7 @@ export class AimReadDomController {
     paragraphCount.append(paragraphCountValue, paragraphCountLabel);
 
     meta.append(currentParagraph, paragraphCount);
-    this.statusOverlay.append(topRow, title, meta);
+    card.append(topLine, title, meta);
+    this.statusOverlay.append(card);
   }
 }

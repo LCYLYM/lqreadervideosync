@@ -479,7 +479,15 @@ function handleReaderPageKeyboardShortcut(event: KeyboardEvent): void {
   if (handledKeyboardEvents.has(event)) {
     return;
   }
-  if (isEditableTarget(event.target) || event.metaKey || event.ctrlKey || event.altKey || event.isComposing) {
+  const targetNode = event.target instanceof Node ? event.target : null;
+  if (
+    isExtensionOwnedNode(targetNode) ||
+    isEditableTarget(event.target) ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    event.isComposing
+  ) {
     return;
   }
 
