@@ -76,6 +76,8 @@ interface ShortcutSettings {
   seekSeconds: number;
 }
 
+type PlayerThemePreference = "system" | "light" | "dark";
+
 interface TutorialStep {
   title: string;
   description: string;
@@ -89,8 +91,10 @@ interface TutorialStateRecord {
 }
 
 const shortcutStorageKey = "reader-sync-shortcut-settings";
+const themeStorageKey = "reader-sync-player-theme";
 const tutorialStorageKey = "reader-sync-player-tutorial";
 const tutorialVersion = "2026-04-player-onboarding-v1";
+const themePreferenceOrder: PlayerThemePreference[] = ["system", "dark", "light"];
 const defaultShortcutSettings: ShortcutSettings = {
   togglePlayback: "Space",
   seekBackward: "ArrowLeft",
@@ -189,6 +193,7 @@ const elements = {
   connectedTabsStatus: requireElement<HTMLElement>("#connected-tabs-status"),
   exportPageContextButton: requireElement<HTMLButtonElement>("#export-page-context"),
   openTutorialButton: requireElement<HTMLButtonElement>("#open-tutorial"),
+  themeToggleButton: requireElement<HTMLButtonElement>("#theme-toggle"),
   pipToggle: requireElement<HTMLButtonElement>("#pip-toggle"),
   pipTogglePlayer: requireElement<HTMLButtonElement>("#pip-toggle-player"),
   playToggle: requireElement<HTMLButtonElement>("#play-toggle"),
@@ -300,6 +305,8 @@ let tutorialActive = false;
 let tutorialStepIndex = 0;
 let tutorialActiveTarget: HTMLElement | null = null;
 let tutorialPositionTimer: number | null = null;
+let themePreference: PlayerThemePreference = "system";
+const systemDarkModeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
 function clearPlayerPortReconnectTimer(): void {
   if (playerPortReconnectTimer !== null) {
@@ -692,6 +699,68 @@ async function loadShortcutSettings(): Promise<void> {
   const stored = await chrome.storage.local.get(shortcutStorageKey);
   shortcutSettings = sanitizeShortcutSettings(stored[shortcutStorageKey]);
   applyShortcutSettingsToInputs(shortcutSettings);
+}
+
+function sanitizeThemePreference(rawValue: unknown): PlayerThemePreference {
+  if (rawValue === "light" || rawValue === "dark" || rawValue === "system") {
+    return rawValue;
+  }
+
+  return "system";
+}
+
+function resolveAppliedTheme(preference: PlayerThemePreference): "light" | "dark" {
+  if (preference === "dark") {
+    return "dark";
+  }
+
+  if (preference === "light") {
+    return "light";
+  }
+
+  return systemDarkModeMediaQuery.matches ? "dark" : "light";
+}
+
+function describeThemePreference(preference: PlayerThemePreference): string {
+  switch (preference) {
+    case "dark":
+      return "深色";
+    case "light":
+      return "浅色";
+    default:
+      return "跟随系统";
+  }
+}
+
+function applyThemePreference(): void {
+  const appliedTheme = resolveAppliedTheme(themePreference);
+  document.documentElement.dataset.theme = appliedTheme;
+  document.documentElement.dataset.themePreference = themePreference;
+  elements.themeToggleButton.textContent = `主题：${describeThemePreference(themePreference)}`;
+  elements.themeToggleButton.setAttribute(
+    "aria-label",
+    `当前为${describeThemePreference(themePreference)}，点击切换主题模式`
+  );
+}
+
+async function loadThemePreference(): Promise<void> {
+  const stored = await chrome.storage.local.get(themeStorageKey);
+  themePreference = sanitizeThemePreference(stored[themeStorageKey]);
+  applyThemePreference();
+}
+
+async function persistThemePreference(nextPreference: PlayerThemePreference): Promise<void> {
+  themePreference = nextPreference;
+  applyThemePreference();
+  await chrome.storage.local.set({
+    [themeStorageKey]: nextPreference
+  });
+}
+
+function cycleThemePreference(): PlayerThemePreference {
+  const currentIndex = themePreferenceOrder.indexOf(themePreference);
+  const nextIndex = (currentIndex + 1) % themePreferenceOrder.length;
+  return themePreferenceOrder[nextIndex] ?? "system";
 }
 
 function sanitizeTutorialState(rawValue: unknown): TutorialStateRecord {
@@ -2919,6 +2988,23 @@ elements.saveShortcuts.addEventListener("click", () => {
     });
 });
 
+elements.themeToggleButton.addEventListener("click", () => {
+  const nextPreference = cycleThemePreference();
+  void persistThemePreference(nextPreference)
+    .then(() => {
+      setStatus(`主题模式已切换为${describeThemePreference(nextPreference)}。`);
+      appendLog("主题模式已更新", {
+        preference: nextPreference,
+        appliedTheme: resolveAppliedTheme(nextPreference)
+      });
+    })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(message);
+      appendLog("保存主题模式失败", { message });
+    });
+});
+
 elements.exportPageContextButton.addEventListener("click", () => {
   if (!pageContext) {
     return;
@@ -3215,6 +3301,11 @@ void loadShortcutSettings().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   appendLog("读取快捷键设置失败", { message });
 });
+void loadThemePreference().catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  appendLog("读取主题模式失败", { message });
+  applyThemePreference();
+});
 void loadTutorialState().then(() => {
   if (shouldAutoOpenTutorial()) {
     window.setTimeout(() => {
@@ -3225,6 +3316,12 @@ void loadTutorialState().then(() => {
   appendLog("读取新手引导状态失败", {
     message: error instanceof Error ? error.message : String(error)
   });
+});
+
+systemDarkModeMediaQuery.addEventListener("change", () => {
+  if (themePreference === "system") {
+    applyThemePreference();
+  }
 });
 
 if (searchParameters.get("autofetch") === "1") {
