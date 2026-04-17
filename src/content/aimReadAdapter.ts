@@ -9,6 +9,20 @@ const ANALYSIS_EMPTY_HINT = "点击段落左侧 Sparkle 查看句子解析";
 
 type OverlayMode = "expanded" | "docked";
 
+interface StatusOverlayElements {
+  dockedToggle: HTMLButtonElement;
+  dockedParagraphTag: HTMLElement;
+  dockedStateText: HTMLElement;
+  expandedCard: HTMLDivElement;
+  expandedLabel: HTMLElement;
+  expandedStatePill: HTMLElement;
+  expandedTitle: HTMLDivElement;
+  expandedCurrentParagraphValue: HTMLElement;
+  expandedCurrentParagraphLabel: HTMLElement;
+  expandedParagraphCountValue: HTMLElement;
+  expandedParagraphCountLabel: HTMLElement;
+}
+
 function parseNumericQueryParameter(name: string): number | null {
   const value = new URL(window.location.href).searchParams.get(name);
   if (!value) {
@@ -176,11 +190,11 @@ function ensureStyle(): void {
       right: 16px;
       bottom: 18px;
       z-index: 2147483647;
+      overflow: visible;
       color: #f8f1e5;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       transition:
         right 180ms ease,
-        transform 180ms ease,
         opacity 180ms ease;
       pointer-events: auto;
     }
@@ -243,9 +257,12 @@ function ensureStyle(): void {
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-overlay-toggle-docked:hover {
-      transform: translateX(-4px);
       box-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
       border-color: rgba(255, 248, 236, 0.2);
+    }
+
+    #${STATUS_OVERLAY_ID} .reader-sync-overlay-toggle-docked:active {
+      transform: translateX(-1px);
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-docked-dot {
@@ -454,6 +471,7 @@ function findParagraphAnalysisTrigger(activeNode: HTMLElement, paragraphIndex: n
 export class AimReadDomController {
   private readonly clickHandlers = new Set<(paragraphIndex: number) => void>();
   private readonly statusOverlay: HTMLDivElement;
+  private readonly statusOverlayElements: StatusOverlayElements;
   private activeParagraphIndex: number | null = null;
   private activeElement: HTMLElement | null = null;
   private lastFollowedAnalysisParagraphIndex: number | null = null;
@@ -465,6 +483,7 @@ export class AimReadDomController {
   constructor() {
     ensureStyle();
     this.statusOverlay = this.ensureStatusOverlay();
+    this.statusOverlayElements = this.ensureStatusOverlayElements();
     void this.loadOverlayMode();
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== "local" || !(OVERLAY_MODE_STORAGE_KEY in changes)) {
@@ -586,6 +605,93 @@ export class AimReadDomController {
     return overlay;
   }
 
+  private ensureStatusOverlayElements(): StatusOverlayElements {
+    const dockedToggle = document.createElement("button");
+    dockedToggle.type = "button";
+    dockedToggle.className = "reader-sync-overlay-toggle reader-sync-overlay-toggle-docked";
+    dockedToggle.setAttribute("aria-expanded", "false");
+    dockedToggle.setAttribute("aria-label", "展开 Reader Sync 同步状态");
+    dockedToggle.title = "展开同步状态";
+    dockedToggle.hidden = true;
+    dockedToggle.addEventListener("click", () => {
+      void this.setOverlayMode("expanded");
+    });
+
+    const dockedDot = document.createElement("span");
+    dockedDot.className = "reader-sync-docked-dot";
+    dockedDot.setAttribute("aria-hidden", "true");
+
+    const dockedBody = document.createElement("span");
+    dockedBody.className = "reader-sync-docked-body";
+
+    const dockedParagraphTag = document.createElement("strong");
+    const dockedStateText = document.createElement("span");
+    dockedBody.append(dockedParagraphTag, dockedStateText);
+    dockedToggle.append(dockedDot, dockedBody);
+
+    const expandedCard = document.createElement("div");
+    expandedCard.className = "reader-sync-status-card";
+
+    const topLine = document.createElement("div");
+    topLine.className = "reader-sync-status-topline";
+
+    const topRow = document.createElement("div");
+    topRow.className = "reader-sync-status-top";
+
+    const expandedLabel = document.createElement("span");
+    expandedLabel.className = "reader-sync-status-label";
+
+    const expandedStatePill = document.createElement("span");
+    expandedStatePill.className = "reader-sync-state-pill";
+    topRow.append(expandedLabel, expandedStatePill);
+
+    const collapseButton = document.createElement("button");
+    collapseButton.type = "button";
+    collapseButton.className = "reader-sync-overlay-toggle reader-sync-overlay-action";
+    collapseButton.setAttribute("aria-expanded", "true");
+    collapseButton.setAttribute("aria-label", "贴边收起 Reader Sync 同步状态");
+    collapseButton.title = "贴边收起";
+    collapseButton.addEventListener("click", () => {
+      void this.setOverlayMode("docked");
+    });
+
+    const expandedTitle = document.createElement("div");
+    expandedTitle.className = "reader-sync-status-title";
+
+    const meta = document.createElement("div");
+    meta.className = "reader-sync-status-meta";
+
+    const currentParagraph = document.createElement("div");
+    const expandedCurrentParagraphValue = document.createElement("strong");
+    const expandedCurrentParagraphLabel = document.createElement("span");
+    currentParagraph.append(expandedCurrentParagraphValue, expandedCurrentParagraphLabel);
+
+    const paragraphCount = document.createElement("div");
+    const expandedParagraphCountValue = document.createElement("strong");
+    const expandedParagraphCountLabel = document.createElement("span");
+    paragraphCount.append(expandedParagraphCountValue, expandedParagraphCountLabel);
+
+    topLine.append(topRow, collapseButton);
+    meta.append(currentParagraph, paragraphCount);
+    expandedCard.append(topLine, expandedTitle, meta);
+
+    this.statusOverlay.append(expandedCard, dockedToggle);
+
+    return {
+      dockedToggle,
+      dockedParagraphTag,
+      dockedStateText,
+      expandedCard,
+      expandedLabel,
+      expandedStatePill,
+      expandedTitle,
+      expandedCurrentParagraphValue,
+      expandedCurrentParagraphLabel,
+      expandedParagraphCountValue,
+      expandedParagraphCountLabel
+    };
+  }
+
   private async loadOverlayMode(): Promise<void> {
     try {
       const stored = await chrome.storage.local.get(OVERLAY_MODE_STORAGE_KEY);
@@ -672,91 +778,35 @@ export class AimReadDomController {
   private renderStatusOverlay(): void {
     this.statusOverlay.dataset.playerState = this.playerState ?? "idle";
     this.statusOverlay.dataset.overlayMode = this.overlayMode;
-    this.statusOverlay.replaceChildren();
+    const stateLabel = playbackStateLabel(this.playerState);
+    const activeParagraphLabel = this.activeParagraphIndex === null ? "-" : `#${this.activeParagraphIndex}`;
+    const {
+      dockedToggle,
+      dockedParagraphTag,
+      dockedStateText,
+      expandedCard,
+      expandedLabel,
+      expandedStatePill,
+      expandedTitle,
+      expandedCurrentParagraphValue,
+      expandedCurrentParagraphLabel,
+      expandedParagraphCountValue,
+      expandedParagraphCountLabel
+    } = this.statusOverlayElements;
 
-    if (this.overlayMode === "docked") {
-      const dockedToggle = document.createElement("button");
-      dockedToggle.type = "button";
-      dockedToggle.className = "reader-sync-overlay-toggle reader-sync-overlay-toggle-docked";
-      dockedToggle.setAttribute("aria-expanded", "false");
-      dockedToggle.setAttribute("aria-label", "展开 Reader Sync 同步状态");
-      dockedToggle.title = "展开同步状态";
-      dockedToggle.addEventListener("click", () => {
-        void this.setOverlayMode("expanded");
-      });
+    dockedToggle.hidden = this.overlayMode !== "docked";
+    expandedCard.hidden = this.overlayMode !== "expanded";
 
-      const dot = document.createElement("span");
-      dot.className = "reader-sync-docked-dot";
-      dot.setAttribute("aria-hidden", "true");
+    dockedToggle.setAttribute("aria-expanded", this.overlayMode === "expanded" ? "true" : "false");
+    dockedParagraphTag.textContent = this.activeParagraphIndex === null ? "Sync" : activeParagraphLabel;
+    dockedStateText.textContent = stateLabel;
 
-      const body = document.createElement("span");
-      body.className = "reader-sync-docked-body";
-
-      const paragraphTag = document.createElement("strong");
-      paragraphTag.textContent = this.activeParagraphIndex === null ? "Sync" : `#${this.activeParagraphIndex}`;
-
-      const stateText = document.createElement("span");
-      stateText.textContent = playbackStateLabel(this.playerState);
-
-      body.append(paragraphTag, stateText);
-      dockedToggle.append(dot, body);
-      this.statusOverlay.append(dockedToggle);
-      return;
-    }
-
-    const card = document.createElement("div");
-    card.className = "reader-sync-status-card";
-
-    const topLine = document.createElement("div");
-    topLine.className = "reader-sync-status-topline";
-
-    const topRow = document.createElement("div");
-    topRow.className = "reader-sync-status-top";
-
-    const label = document.createElement("span");
-    label.className = "reader-sync-status-label";
-    label.textContent = "Reader Sync";
-
-    const statePill = document.createElement("span");
-    statePill.className = "reader-sync-state-pill";
-    statePill.textContent = playbackStateLabel(this.playerState);
-    topRow.append(label, statePill);
-
-    const collapseButton = document.createElement("button");
-    collapseButton.type = "button";
-    collapseButton.className = "reader-sync-overlay-toggle reader-sync-overlay-action";
-    collapseButton.textContent = "贴边";
-    collapseButton.setAttribute("aria-expanded", "true");
-    collapseButton.setAttribute("aria-label", "贴边收起 Reader Sync 同步状态");
-    collapseButton.title = "贴边收起";
-    collapseButton.addEventListener("click", () => {
-      void this.setOverlayMode("docked");
-    });
-    topLine.append(topRow, collapseButton);
-
-    const title = document.createElement("div");
-    title.className = "reader-sync-status-title";
-    title.textContent = truncateText(this.currentTitle, 80);
-
-    const meta = document.createElement("div");
-    meta.className = "reader-sync-status-meta";
-
-    const currentParagraph = document.createElement("div");
-    const currentParagraphLabel = document.createElement("span");
-    currentParagraphLabel.textContent = "当前段落";
-    const currentParagraphValue = document.createElement("strong");
-    currentParagraphValue.textContent = this.activeParagraphIndex === null ? "-" : `#${this.activeParagraphIndex}`;
-    currentParagraph.append(currentParagraphValue, currentParagraphLabel);
-
-    const paragraphCount = document.createElement("div");
-    const paragraphCountLabel = document.createElement("span");
-    paragraphCountLabel.textContent = "已识别可见段";
-    const paragraphCountValue = document.createElement("strong");
-    paragraphCountValue.textContent = String(this.visibleParagraphCount);
-    paragraphCount.append(paragraphCountValue, paragraphCountLabel);
-
-    meta.append(currentParagraph, paragraphCount);
-    card.append(topLine, title, meta);
-    this.statusOverlay.append(card);
+    expandedLabel.textContent = "Reader Sync";
+    expandedStatePill.textContent = stateLabel;
+    expandedTitle.textContent = truncateText(this.currentTitle, 80);
+    expandedCurrentParagraphValue.textContent = activeParagraphLabel;
+    expandedCurrentParagraphLabel.textContent = "当前段落";
+    expandedParagraphCountValue.textContent = String(this.visibleParagraphCount);
+    expandedParagraphCountLabel.textContent = "已识别可见段";
   }
 }
