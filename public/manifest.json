@@ -1,16 +1,23 @@
 {
   "manifest_version": 3,
-  "name": "Reader Sync By 🐟",
-  "description": "Sync local episode videos and subtitle files with authenticated aim-read reader pages.",
-  "version": "0.1.6",
-  "homepage_url": "https://github.com/LCYLYM/lqreadervideosync",
+  "name": "Reader Sync Player",
+  "description": "Synchronize a local video player with aim-read.top reading pages.",
+  "version": "0.1.8",
   "minimum_chrome_version": "120",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "permissions": [
     "storage",
     "tabs"
   ],
   "host_permissions": [
-    "https://aim-read.top/*"
+    "https://aim-read.top/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js",
@@ -26,7 +33,13 @@
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
   },
   "action": {
-    "default_title": "Open Reader Sync By 🐟"
+    "default_title": "Open Reader Sync Player",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "content_scripts": [
     {

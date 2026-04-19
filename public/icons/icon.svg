@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Reader Sync by 🐟">
+  <defs>
+    <linearGradient id="rs-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#D87B58"/>
+      <stop offset="1" stop-color="#C96442"/>
+    </linearGradient>
+    <linearGradient id="rs-body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFDF9"/>
+      <stop offset="1" stop-color="#F5F0E4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- rounded tile backdrop -->
+  <rect width="128" height="128" rx="28" ry="28" fill="url(#rs-bg)"/>
+
+  <!-- fish silhouette: body ellipse + triangular tail -->
+  <g>
+    <!-- tail -->
+    <path d="M 46 64 L 22 42 L 30 64 L 22 86 Z" fill="url(#rs-body)"/>
+    <!-- body -->
+    <ellipse cx="76" cy="64" rx="32" ry="22" fill="url(#rs-body)"/>
+    <!-- sync mark: play triangle inside body, color = accent -->
+    <path d="M 66 54 L 88 64 L 66 74 Z" fill="#C96442"/>
+  </g>
+
+  <!-- eye -->
+  <circle cx="100" cy="54" r="3.2" fill="#26251F"/>
+</svg>

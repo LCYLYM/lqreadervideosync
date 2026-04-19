@@ -13,6 +13,7 @@ const ffmpegRuntimeDir = path.join(rootDir, "node_modules", "@ffmpeg", "ffmpeg",
 
 async function copyStaticAssets() {
   await cp(path.join(publicDir, "manifest.json"), path.join(outputDir, "manifest.json"));
+  await cp(path.join(publicDir, "icons"), path.join(outputDir, "icons"), { recursive: true });
   await mkdir(path.join(outputDir, "player"), { recursive: true });
   await cp(path.join(sourceDir, "player", "player.html"), path.join(outputDir, "player", "player.html"));
   await cp(path.join(sourceDir, "player", "player.css"), path.join(outputDir, "player", "player.css"));

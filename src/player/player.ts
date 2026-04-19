@@ -194,6 +194,7 @@ const elements = {
   exportPageContextButton: requireElement<HTMLButtonElement>("#export-page-context"),
   openTutorialButton: requireElement<HTMLButtonElement>("#open-tutorial"),
   themeToggleButton: requireElement<HTMLButtonElement>("#theme-toggle"),
+  maximizePlayerToggle: requireElement<HTMLButtonElement>("#maximize-player-toggle"),
   pipToggle: requireElement<HTMLButtonElement>("#pip-toggle"),
   pipTogglePlayer: requireElement<HTMLButtonElement>("#pip-toggle-player"),
   playToggle: requireElement<HTMLButtonElement>("#play-toggle"),
@@ -295,6 +296,8 @@ let runtimeBuildFingerprint: string | null = null;
 let runtimeBuildRequestedFingerprint: string | null = null;
 let runtimeBuildFailedFingerprint: string | null = null;
 let runtimeBuildToken = 0;
+let articleSnapshotRequestIssuedAt: number | null = null;
+let articleSnapshotLastRequestedAt = 0;
 let playerPort: chrome.runtime.Port | null = null;
 let playerPortReconnectTimer: number | null = null;
 let playerPageUnloading = false;
@@ -308,6 +311,7 @@ let tutorialPositionTimer: number | null = null;
 let themePreference: PlayerThemePreference = "system";
 const systemDarkModeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 let tutorialPreviouslyFocusedElement: HTMLElement | null = null;
+let playerExpanded = false;
 
 function clearPlayerPortReconnectTimer(): void {
   if (playerPortReconnectTimer !== null) {
@@ -388,6 +392,36 @@ function postRuntimeMessage(message: RuntimeMessage, options?: { retry?: boolean
 
 function setStatus(message: string): void {
   elements.statusText.textContent = message;
+}
+
+function updatePlayerExpandButton(): void {
+  elements.maximizePlayerToggle.textContent = playerExpanded ? "还原" : "放大";
+  elements.maximizePlayerToggle.setAttribute("aria-pressed", playerExpanded ? "true" : "false");
+  elements.maximizePlayerToggle.setAttribute(
+    "aria-label",
+    playerExpanded ? "还原播放器布局" : "放大播放器到页面主区域"
+  );
+  elements.maximizePlayerToggle.title = playerExpanded ? "还原播放器布局" : "放大播放器布局";
+}
+
+function applyPlayerExpandedState(): void {
+  document.body.classList.toggle("player-expanded", playerExpanded);
+  updatePlayerExpandButton();
+}
+
+function setPlayerExpanded(nextExpanded: boolean): void {
+  if (playerExpanded === nextExpanded) {
+    return;
+  }
+
+  playerExpanded = nextExpanded;
+  applyPlayerExpandedState();
+  setStatus(nextExpanded ? "播放器已放大到页面主区域。" : "播放器布局已还原。");
+  appendLog("播放器布局模式已更新", { expanded: nextExpanded });
+}
+
+function togglePlayerExpanded(): void {
+  setPlayerExpanded(!playerExpanded);
 }
 
 function setMatchingProgress(message: string, percent?: number): void {
@@ -1368,10 +1402,14 @@ function resolvePageBindingUiState(): {
   }
 
   if (!manifest) {
+    const waitingFullArticleLabel =
+      articleSnapshotRequestIssuedAt !== null
+        ? `正在获取全文（已等待 ${Math.max(1, Math.round((Date.now() - articleSnapshotRequestIssuedAt) / 1000))} 秒）并自动匹配`
+        : "等待全文抓取并自动匹配";
     const waitingLabel = subtitleAutoBuildEnabled
       ? isSnapshotFallback
-        ? `已连接阅读页快照 (${selectedTabLabel})，等待全文抓取并自动匹配`
-        : `已连接阅读页 (${selectedTabLabel})，等待全文抓取并自动匹配`
+        ? `已连接阅读页快照 (${selectedTabLabel})，${waitingFullArticleLabel}`
+        : `已连接阅读页 (${selectedTabLabel})，${waitingFullArticleLabel}`
       : isSnapshotFallback
         ? `已连接阅读页快照 (${selectedTabLabel})，等待页面列表同步并加载清单`
         : `已连接阅读页 (${selectedTabLabel})，等待清单`;
@@ -1509,6 +1547,10 @@ function setSubtitleStatus(message: string): void {
 function updateArticleSnapshot(snapshot: AimReadArticleSnapshot | null, error: string | null, tabId: number | null): void {
   articleSnapshot = snapshot;
   articleSnapshotError = error;
+  if (snapshot || error) {
+    articleSnapshotRequestIssuedAt = null;
+    articleSnapshotLastRequestedAt = 0;
+  }
   if (typeof tabId === "number") {
     activePageTabId = tabId;
     if (boundPageTabId === null) {
@@ -1540,6 +1582,14 @@ function updateArticleSnapshot(snapshot: AimReadArticleSnapshot | null, error: s
 }
 
 function requestArticleSnapshot(): void {
+  const now = Date.now();
+  if (articleSnapshotRequestIssuedAt === null) {
+    articleSnapshotRequestIssuedAt = now;
+  }
+  if (now - articleSnapshotLastRequestedAt < 4000) {
+    return;
+  }
+  articleSnapshotLastRequestedAt = now;
   postRuntimeMessage({ type: "REQUEST_ACTIVE_ARTICLE_SNAPSHOT" } satisfies RuntimeMessage);
 }
 
@@ -2161,6 +2211,8 @@ function resetRuntimeSubtitleBuild(): void {
   runtimeBuildInFlight = false;
   runtimeBuildRequestedFingerprint = null;
   runtimeBuildFailedFingerprint = null;
+  articleSnapshotRequestIssuedAt = null;
+  articleSnapshotLastRequestedAt = 0;
 }
 
 function resolveRuntimeBuildFingerprint(): string | null {
@@ -2197,7 +2249,14 @@ function applyRuntimeSubtitleStatus(buildResult: RuntimeManifestBuildResult | nu
       return;
     }
     if (!articleSnapshot) {
-      setSubtitleStatus("字幕已载入，等待从 reader 页面拉取全文文章后自动匹配。");
+      if (articleSnapshotRequestIssuedAt !== null) {
+        const elapsedSeconds = Math.max(1, Math.round((Date.now() - articleSnapshotRequestIssuedAt) / 1000));
+        setSubtitleStatus(
+          `字幕已载入，正在获取全文文章快照（已等待 ${elapsedSeconds} 秒）。如果长时间不动，通常是站点全文接口较慢，扩展会自动重试并在必要时回退。`
+        );
+        return;
+      }
+      setSubtitleStatus("字幕已载入，准备从 reader 页面拉取全文文章后自动匹配。");
       return;
     }
     setSubtitleStatus("字幕已载入，等待运行时匹配完成。");
@@ -3052,6 +3111,10 @@ elements.pipTogglePlayer.addEventListener("click", async () => {
   }
 });
 
+elements.maximizePlayerToggle.addEventListener("click", () => {
+  togglePlayerExpanded();
+});
+
 elements.openTutorialButton.addEventListener("click", () => {
   openTutorial({ scroll: true });
 });
@@ -3138,6 +3201,12 @@ window.addEventListener("keydown", async (event) => {
       event.preventDefault();
       void dismissTutorial();
     }
+    return;
+  }
+
+  if (event.key === "Escape" && playerExpanded) {
+    event.preventDefault();
+    setPlayerExpanded(false);
     return;
   }
 
@@ -3290,6 +3359,7 @@ renderRemoteManifestCandidates();
 renderConnectedTabs();
 renderCurrentSyncDetails(currentPlaybackTimeMs());
 setStatus("等待输入。");
+applyPlayerExpandedState();
 connectPlayerPort();
 requestConnectedTabs();
 postRuntimeMessage({ type: "REQUEST_ACTIVE_PAGE_CONTEXT" } satisfies RuntimeMessage);

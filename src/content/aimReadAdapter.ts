@@ -173,60 +173,78 @@ function ensureStyle(): void {
   const styleElement = document.createElement("style");
   styleElement.id = STYLE_ELEMENT_ID;
   styleElement.textContent = `
+    #${STATUS_OVERLAY_ID} {
+      --rs-accent: #c96442;
+      --rs-surface: rgba(255, 253, 247, 0.94);
+      --rs-ink: #2a2620;
+      --rs-ink-muted: rgba(42, 38, 32, 0.7);
+      --rs-line: rgba(42, 38, 32, 0.1);
+      --rs-shadow: 0 16px 40px rgba(20, 14, 8, 0.16);
+      --rs-dot-idle: #9a968c;
+      --rs-dot-idle-halo: rgba(154, 150, 140, 0.18);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      #${STATUS_OVERLAY_ID} {
+        --rs-surface: rgba(30, 28, 24, 0.94);
+        --rs-ink: #f0e9dc;
+        --rs-ink-muted: rgba(240, 233, 220, 0.72);
+        --rs-line: rgba(255, 248, 236, 0.12);
+        --rs-shadow: 0 16px 40px rgba(0, 0, 0, 0.48);
+        --rs-dot-idle: #7a746a;
+        --rs-dot-idle-halo: rgba(122, 116, 106, 0.24);
+      }
+    }
+
     [${MARKER_ATTRIBUTE}] {
       position: relative;
-      transition: background-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
-      scroll-margin-block: 10vh;
+      transition: background-color 160ms ease, box-shadow 160ms ease;
+      scroll-margin-block: 12vh;
     }
 
     [${MARKER_ATTRIBUTE}].reader-sync-active {
-      background: rgba(255, 226, 106, 0.28);
-      box-shadow: inset 3px 0 0 rgba(196, 135, 0, 0.85);
-      border-radius: 10px;
-      transform: translateX(2px);
+      background: rgba(201, 100, 66, 0.12);
+      box-shadow: inset 3px 0 0 #c96442;
+      border-radius: 6px;
     }
 
     #${STATUS_OVERLAY_ID} {
       position: fixed;
-      right: 16px;
-      bottom: 18px;
+      right: 14px;
+      bottom: 14px;
       z-index: 2147483647;
       overflow: visible;
-      color: #f8f1e5;
+      color: var(--rs-ink);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       transition:
-        right 180ms ease,
-        opacity 180ms ease;
+        right 200ms cubic-bezier(0.2, 0.9, 0.2, 1),
+        opacity 160ms ease;
       pointer-events: auto;
     }
 
     #${STATUS_OVERLAY_ID}[data-overlay-mode="expanded"] {
-      width: min(320px, calc(100vw - 32px));
+      width: min(312px, calc(100vw - 28px));
     }
 
     #${STATUS_OVERLAY_ID}[data-overlay-mode="docked"] {
-      right: -42px;
-      width: 96px;
-      height: 84px;
+      right: -32px;
+      width: 84px;
+      height: 72px;
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-status-card,
     #${STATUS_OVERLAY_ID} .reader-sync-overlay-toggle-docked {
-      border: 1px solid rgba(255, 248, 236, 0.12);
-      background:
-        radial-gradient(circle at top left, rgba(255, 196, 81, 0.14), transparent 30%),
-        linear-gradient(180deg, rgba(36, 28, 18, 0.92), rgba(24, 19, 13, 0.88));
-      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.2);
-      backdrop-filter: blur(12px);
+      border: 1px solid var(--rs-line);
+      background: var(--rs-surface);
+      box-shadow: var(--rs-shadow);
+      backdrop-filter: blur(14px) saturate(1.1);
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-status-card {
       padding: 12px 14px;
-      border-radius: 16px;
-    }
-
-    #${STATUS_OVERLAY_ID} .reader-sync-status-card:hover {
-      transform: translateY(-1px);
+      border-radius: 14px;
+      display: grid;
+      gap: 8px;
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-overlay-toggle {
@@ -238,57 +256,51 @@ function ensureStyle(): void {
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-overlay-toggle:focus-visible {
-      outline: 2px solid rgba(255, 196, 81, 0.7);
+      outline: 2px solid var(--rs-accent);
       outline-offset: 3px;
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-overlay-toggle-docked {
       width: 100%;
       height: 100%;
-      padding: 12px 16px 12px 18px;
+      padding: 10px 14px 10px 16px;
       border-radius: 999px 0 0 999px;
       display: flex;
       align-items: center;
       gap: 8px;
       justify-content: flex-start;
       transition:
-        transform 180ms ease,
         box-shadow 180ms ease,
         border-color 180ms ease;
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-overlay-toggle-docked:hover {
-      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
-      border-color: rgba(255, 248, 236, 0.2);
-    }
-
-    #${STATUS_OVERLAY_ID} .reader-sync-overlay-toggle-docked:active {
-      transform: translateX(-1px);
+      border-color: var(--rs-accent);
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-docked-dot {
       flex: 0 0 auto;
-      width: 12px;
-      height: 12px;
+      width: 10px;
+      height: 10px;
       border-radius: 999px;
-      background: #7f8c8d;
-      box-shadow: 0 0 0 5px rgba(127, 140, 141, 0.16);
+      background: var(--rs-dot-idle);
+      box-shadow: 0 0 0 4px var(--rs-dot-idle-halo);
     }
 
     #${STATUS_OVERLAY_ID}[data-player-state="playing"] .reader-sync-docked-dot {
-      background: #4fe089;
-      box-shadow: 0 0 0 5px rgba(79, 224, 137, 0.16);
+      background: #2f7656;
+      box-shadow: 0 0 0 4px rgba(47, 118, 86, 0.18);
     }
 
     #${STATUS_OVERLAY_ID}[data-player-state="paused"] .reader-sync-docked-dot,
     #${STATUS_OVERLAY_ID}[data-player-state="ended"] .reader-sync-docked-dot {
-      background: #ffc451;
-      box-shadow: 0 0 0 5px rgba(255, 196, 81, 0.16);
+      background: #9b6b1f;
+      box-shadow: 0 0 0 4px rgba(155, 107, 31, 0.18);
     }
 
     #${STATUS_OVERLAY_ID}[data-player-state="error"] .reader-sync-docked-dot {
-      background: #ff7b7b;
-      box-shadow: 0 0 0 5px rgba(255, 123, 123, 0.16);
+      background: #b6493a;
+      box-shadow: 0 0 0 4px rgba(182, 73, 58, 0.18);
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-docked-body {
@@ -299,22 +311,21 @@ function ensureStyle(): void {
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-docked-body strong {
-      font-size: 13px;
-      font-weight: 700;
-      color: #fff8ec;
-      line-height: 1;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--rs-ink);
+      line-height: 1.1;
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-docked-body span {
-      font-size: 11px;
-      color: rgba(248, 241, 229, 0.82);
+      font-size: 10px;
+      color: var(--rs-ink-muted);
       line-height: 1.1;
       white-space: nowrap;
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-docked-body span::after {
-      content: " / 展开";
-      color: rgba(255, 232, 214, 0.64);
+      content: "";
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-status-topline {
@@ -322,19 +333,20 @@ function ensureStyle(): void {
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      margin-bottom: 8px;
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-status-label {
-      font-size: 12px;
-      letter-spacing: 0.04em;
+      font-size: 10px;
+      letter-spacing: 0.12em;
       text-transform: uppercase;
+      color: var(--rs-ink-muted);
+      font-weight: 600;
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-status-top {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
       min-width: 0;
     }
 
@@ -342,77 +354,100 @@ function ensureStyle(): void {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 3px 9px;
+      padding: 2px 10px;
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.12);
+      background: rgba(201, 100, 66, 0.1);
+      color: var(--rs-accent);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-state-pill::before {
       content: "";
-      width: 8px;
-      height: 8px;
+      width: 6px;
+      height: 6px;
       border-radius: 999px;
-      background: #7f8c8d;
-      box-shadow: 0 0 0 4px rgba(127, 140, 141, 0.14);
+      background: currentColor;
+      box-shadow: 0 0 0 3px rgba(201, 100, 66, 0.18);
+    }
+
+    #${STATUS_OVERLAY_ID}[data-player-state="playing"] .reader-sync-state-pill {
+      background: rgba(47, 118, 86, 0.14);
+      color: #2f7656;
     }
 
     #${STATUS_OVERLAY_ID}[data-player-state="playing"] .reader-sync-state-pill::before {
-      background: #4fe089;
-      box-shadow: 0 0 0 4px rgba(79, 224, 137, 0.18);
+      box-shadow: 0 0 0 3px rgba(47, 118, 86, 0.2);
+    }
+
+    #${STATUS_OVERLAY_ID}[data-player-state="paused"] .reader-sync-state-pill,
+    #${STATUS_OVERLAY_ID}[data-player-state="ended"] .reader-sync-state-pill {
+      background: rgba(155, 107, 31, 0.14);
+      color: #9b6b1f;
     }
 
     #${STATUS_OVERLAY_ID}[data-player-state="paused"] .reader-sync-state-pill::before,
     #${STATUS_OVERLAY_ID}[data-player-state="ended"] .reader-sync-state-pill::before {
-      background: #ffc451;
-      box-shadow: 0 0 0 4px rgba(255, 196, 81, 0.18);
+      box-shadow: 0 0 0 3px rgba(155, 107, 31, 0.2);
+    }
+
+    #${STATUS_OVERLAY_ID}[data-player-state="error"] .reader-sync-state-pill {
+      background: rgba(182, 73, 58, 0.14);
+      color: #b6493a;
     }
 
     #${STATUS_OVERLAY_ID}[data-player-state="error"] .reader-sync-state-pill::before {
-      background: #ff7b7b;
-      box-shadow: 0 0 0 4px rgba(255, 123, 123, 0.16);
+      box-shadow: 0 0 0 3px rgba(182, 73, 58, 0.2);
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-overlay-action {
       flex: 0 0 auto;
-      min-height: 32px;
+      min-height: 28px;
       padding: 0 10px;
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.09);
-      color: #fff8ec;
+      background: rgba(201, 100, 66, 0.1);
+      color: var(--rs-accent);
+      font-size: 11px;
+      font-weight: 600;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      transition:
-        background-color 160ms ease,
-        transform 160ms ease;
+      transition: background-color 160ms ease;
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-overlay-action:hover {
-      background: rgba(255, 255, 255, 0.16);
-      transform: translateY(-1px);
+      background: rgba(201, 100, 66, 0.2);
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-status-title {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
-      line-height: 1.35;
-      margin-bottom: 6px;
+      line-height: 1.4;
+      color: var(--rs-ink);
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-status-meta {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
-      font-size: 12px;
-      color: rgba(248, 241, 229, 0.8);
+      font-size: 11px;
+      color: var(--rs-ink-muted);
     }
 
     #${STATUS_OVERLAY_ID} .reader-sync-status-meta strong {
       display: block;
       margin-bottom: 2px;
-      color: #fff8ec;
-      font-size: 13px;
+      color: var(--rs-ink);
+      font-size: 12px;
       font-weight: 600;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #${STATUS_OVERLAY_ID},
+      #${STATUS_OVERLAY_ID} * {
+        transition: none !important;
+      }
     }
   `;
   document.documentElement.append(styleElement);
