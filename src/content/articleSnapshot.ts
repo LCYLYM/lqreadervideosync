@@ -2,7 +2,8 @@ import { createLogger } from "../shared/logger";
 import type { AimReadArticleSnapshot, ArticleParagraph } from "../shared/protocol";
 
 const logger = createLogger("article-snapshot");
-const ARTICLE_API_REQUEST_TIMEOUT_MS = 15000;
+const ARTICLE_API_REQUEST_TIMEOUT_MS = 8000;
+const ARTICLE_API_PAGE_SIZE_STRATEGIES = [500, 200, 100] as const;
 
 interface AimReadArticleApiParagraph {
   paragraphIndex: number;
@@ -154,14 +155,11 @@ async function fetchArticlePage(articleId: number, page: number, pageSize: numbe
   return unwrapArticleApiPayload((await response.json()) as unknown);
 }
 
-export async function collectArticleSnapshotFromApi(): Promise<AimReadArticleSnapshot> {
-  const articleId = resolveArticleIdFromUrl();
-  if (articleId === null) {
-    throw new Error("当前页面不是可识别的 aim-read 剧集文章页。");
-  }
-
-  const categoryId = parseNumericQueryParameter("categoryId");
-  const pageSize = 500;
+async function collectArticleSnapshotFromApiWithPageSize(
+  articleId: number,
+  categoryId: number | null,
+  pageSize: number
+): Promise<AimReadArticleSnapshot> {
   const paragraphsByIndex = new Map<number, ArticleParagraph>();
   let title: string | null = null;
   let totalPages: number | null = null;
@@ -172,7 +170,8 @@ export async function collectArticleSnapshotFromApi(): Promise<AimReadArticleSna
   logger.info("Starting article snapshot collection from API", {
     articleId,
     categoryId,
-    articleUrl: window.location.href
+    articleUrl: window.location.href,
+    pageSize
   });
 
   while (hasNext) {
@@ -251,6 +250,39 @@ export async function collectArticleSnapshotFromApi(): Promise<AimReadArticleSna
       totalElements: totalElements ?? paragraphs.length
     }
   };
+}
+
+export async function collectArticleSnapshotFromApi(): Promise<AimReadArticleSnapshot> {
+  const articleId = resolveArticleIdFromUrl();
+  if (articleId === null) {
+    throw new Error("当前页面不是可识别的 aim-read 剧集文章页。");
+  }
+
+  const categoryId = parseNumericQueryParameter("categoryId");
+  const failures: string[] = [];
+
+  for (const pageSize of ARTICLE_API_PAGE_SIZE_STRATEGIES) {
+    try {
+      logger.info("Trying article snapshot API strategy", {
+        articleId,
+        categoryId,
+        articleUrl: window.location.href,
+        pageSize
+      });
+      return await collectArticleSnapshotFromApiWithPageSize(articleId, categoryId, pageSize);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(`pageSize=${pageSize}: ${message}`);
+      logger.warn("Article snapshot API strategy failed", {
+        articleId,
+        categoryId,
+        pageSize,
+        message
+      });
+    }
+  }
+
+  throw new Error(`文章接口抓取失败：${failures.join(" | ")}`);
 }
 
 function findArticleRoot(): HTMLElement | null {

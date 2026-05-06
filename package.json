@@ -1,13 +1,14 @@
 {
   "name": "reader-sync-extension",
   "private": true,
-  "version": "0.1.8",
+  "version": "0.1.9",
   "type": "module",
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "check": "tsc --noEmit",
     "clean": "rm -rf dist",
-    "smoke:test": "node ./scripts/extension_smoke_test.mjs"
+    "smoke:test": "node ./scripts/extension_smoke_test.mjs",
+    "smoke:preprocess": "node ./scripts/preprocess_smoke_test.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.294",

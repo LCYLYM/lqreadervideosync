@@ -477,6 +477,15 @@ function updateVideoDecisionControls(): void {
   elements.downloadProcessedVideo.disabled = !hasProcessedVideo || videoInspectionBusy || videoTranscodeBusy;
 }
 
+function setVideoTranscodeProgress(message: string, progress: number): void {
+  if (!Number.isFinite(progress)) {
+    return;
+  }
+  const clampedProgress = clamp(progress, 0, 1);
+  const visibleProgress = clampedProgress >= 1 ? 0.99 : clampedProgress;
+  setVideoProcessingProgress(message, visibleProgress);
+}
+
 function describeVideoProbe(fileName: string, probe: MediaProbeResult): string {
   const videoStream = probe.streams.find((stream) => stream.codecType === "video");
   const audioStreams = probe.streams.filter((stream) => stream.codecType === "audio");
@@ -2055,6 +2064,8 @@ function buildBrowserFfmpegStatusMessage(event: BrowserFfmpegStatusEvent): strin
       return event.detail?.message ?? "正在分析媒体流";
     case "transcoding":
       return event.detail?.message ?? "正在预处理媒体流";
+    case "finalizing-output":
+      return event.detail?.message ?? "正在封口输出文件";
     case "reading-output":
       return event.detail?.message ?? "正在读取输出文件";
     case "completed":
@@ -2162,10 +2173,28 @@ async function preprocessVideoFile(): Promise<void> {
       onStatusChange: (event) => {
         const message = buildBrowserFfmpegStatusMessage(event);
         elements.videoProcessingStatus.textContent = message;
+        if (event.phase === "finalizing-output") {
+          setVideoProcessingProgress(message, 0.99);
+          appendLog("FFmpeg 编码阶段完成，开始封口输出", {
+            fileName: sourceFile.name
+          });
+          return;
+        }
+        if (event.phase === "reading-output") {
+          setVideoProcessingProgress(message, 0.99);
+          appendLog("开始读取本地预处理产物", {
+            fileName: sourceFile.name
+          });
+          return;
+        }
+        if (event.phase === "completed") {
+          setVideoProcessingProgress(message, 1);
+          return;
+        }
         setVideoProcessingProgress(message);
       },
       onProgress: ({ progress }) => {
-        setVideoProcessingProgress(describeTranscodePlan(strategy), progress);
+        setVideoTranscodeProgress(describeTranscodePlan(strategy), progress);
       }
     });
 

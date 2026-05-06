@@ -17,6 +17,7 @@ export interface BrowserFfmpegStatusEvent {
     | "writing-input"
     | "probing"
     | "transcoding"
+    | "finalizing-output"
     | "reading-output"
     | "completed";
   detail?: StatusDetail;
@@ -161,17 +162,26 @@ export class BrowserFfmpegService {
       }
 
       handlers.onStatusChange?.({
+        phase: "finalizing-output",
+        detail: { message: "FFmpeg 已完成编码，正在封口 MP4 输出" }
+      });
+      await waitForLogFlush();
+
+      handlers.onStatusChange?.({
         phase: "reading-output",
         detail: { message: "正在读取预处理结果并生成可播放文件" }
       });
       const outputData = await this.ffmpeg.readFile(outputPath);
-      const outputBytes = outputData instanceof Uint8Array ? Uint8Array.from(outputData) : new TextEncoder().encode(String(outputData));
-      const outputBlob = new Blob([outputBytes.buffer], { type: "video/mp4" });
+      const outputBytes = normalizeBinaryFileData(outputData);
+      if (outputBytes.byteLength === 0) {
+        throw new Error("FFmpeg 输出文件为空，未生成可播放 MP4。");
+      }
+      const outputBlob = new Blob([copyBytesToArrayBuffer(outputBytes)], { type: "video/mp4" });
       const outputFile = new File([outputBlob], strategy.outputFileName, { type: "video/mp4" });
 
       handlers.onStatusChange?.({
         phase: "completed",
-        detail: { message: "预处理完成" }
+        detail: { message: `预处理完成，输出 ${formatBytes(outputBytes.byteLength)}` }
       });
       return {
         file: outputFile,
@@ -387,6 +397,29 @@ function sanitizeFileName(fileName: string): string {
 function buildCommandFailureMessage(commandName: string, exitCode: number, logs: string[]): string {
   const tail = logs.slice(-12).join("\n");
   return `${commandName} exited with code ${exitCode}${tail ? `\nRecent logs:\n${tail}` : ""}`;
+}
+
+function normalizeBinaryFileData(outputData: Uint8Array | string): Uint8Array {
+  return outputData instanceof Uint8Array ? outputData : new TextEncoder().encode(outputData);
+}
+
+function copyBytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
+function formatBytes(byteLength: number): string {
+  if (byteLength < 1024) {
+    return `${byteLength} B`;
+  }
+  if (byteLength < 1024 * 1024) {
+    return `${(byteLength / 1024).toFixed(1)} KiB`;
+  }
+  if (byteLength < 1024 * 1024 * 1024) {
+    return `${(byteLength / 1024 / 1024).toFixed(1)} MiB`;
+  }
+  return `${(byteLength / 1024 / 1024 / 1024).toFixed(2)} GiB`;
 }
 
 function enrichWithRecentLogs(error: unknown, recentLogs: string[]): Error {
