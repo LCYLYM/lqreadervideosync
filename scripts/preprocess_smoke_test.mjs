@@ -34,6 +34,7 @@ const userDataDir = path.resolve(
 const browserChannel = args.get("browser-channel") ?? "chromium";
 const browserExecutablePath = args.get("browser-executable-path") ?? null;
 const timeoutMs = Number.parseInt(args.get("timeout-ms") ?? "300000", 10);
+const expectMode = args.get("expect-mode") ?? "auto";
 
 function log(message, metadata) {
   if (metadata === undefined) {
@@ -124,9 +125,28 @@ async function main() {
     await page.waitForFunction(() => {
       const plan = document.querySelector("#video-plan")?.textContent?.trim() ?? "";
       const processButton = document.querySelector("#process-play");
-      return plan.includes("AAC") && processButton instanceof HTMLButtonElement && !processButton.disabled;
+      const playerActive = document.querySelector("#player-view")?.classList.contains("is-active") ?? false;
+      const video = document.querySelector("video");
+      const videoReady = video instanceof HTMLVideoElement && video.currentSrc.startsWith("blob:") && video.readyState >= HTMLMediaElement.HAVE_METADATA && Number.isFinite(video.duration) && video.duration > 0;
+      return (playerActive && videoReady) || (plan.includes("AAC") && processButton instanceof HTMLButtonElement && !processButton.disabled);
     }, null, { timeout: 120000 });
-    log("Preprocess action became available", await captureSnapshot(page));
+    let snapshot = await captureSnapshot(page);
+    log("Video decision became available", snapshot);
+
+    if (snapshot.playerActive) {
+      if (expectMode === "preprocess") {
+        throw new Error(`Expected preprocessing to be required, but video entered player directly: ${JSON.stringify(snapshot)}`);
+      }
+      if (snapshot.processingProgressValue !== 100) {
+        throw new Error(`Expected direct-play readiness to set progress to 100, got ${snapshot.processingProgressValue}`);
+      }
+      log("Direct-play video loaded", snapshot);
+      return;
+    }
+
+    if (expectMode === "direct") {
+      throw new Error(`Expected direct playback, but preprocessing is still required: ${JSON.stringify(snapshot)}`);
+    }
 
     await page.evaluate(() => {
       document.querySelector("#subtitle-view")?.classList.remove("is-active");
@@ -141,13 +161,16 @@ async function main() {
         progress.value === 100 &&
         document.querySelector("#player-view")?.classList.contains("is-active") &&
         video instanceof HTMLVideoElement &&
-        video.currentSrc.startsWith("blob:")
+        video.currentSrc.startsWith("blob:") &&
+        video.readyState >= HTMLMediaElement.HAVE_METADATA &&
+        Number.isFinite(video.duration) &&
+        video.duration > 0
       );
     }, null, { timeout: timeoutMs });
 
     const completedSnapshot = await captureSnapshot(page);
     log("Preprocess completed and processed video loaded", completedSnapshot);
-    if (!completedSnapshot.videoName?.includes(".hvc1.aac.mp4")) {
+    if (!/\.(hvc1|avc1)\.aac\.mp4$/.test(completedSnapshot.videoName ?? "")) {
       throw new Error(`Processed video name did not use expected output profile: ${completedSnapshot.videoName}`);
     }
     if (completedSnapshot.processingProgressValue !== 100) {

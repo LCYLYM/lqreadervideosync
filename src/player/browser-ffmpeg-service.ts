@@ -97,6 +97,11 @@ export class BrowserFfmpegService {
   }
 
   async inspectFile(file: File, handlers: BrowserFfmpegHandlers = {}): Promise<MediaProbeResult> {
+    const fastProbe = await inspectMp4ContainerFromFile(file, handlers);
+    if (fastProbe) {
+      return fastProbe;
+    }
+
     await this.ensureLoaded(handlers);
     const jobKey = crypto.randomUUID();
     const inputPath = `${jobKey}-${sanitizeFileName(file.name)}`;
@@ -232,6 +237,193 @@ export class BrowserFfmpegService {
   }
 }
 
+async function inspectMp4ContainerFromFile(
+  file: File,
+  handlers: BrowserFfmpegHandlers
+): Promise<MediaProbeResult | null> {
+  if (!hasMp4LikeExtension(file.name)) {
+    return null;
+  }
+
+  handlers.onStatusChange?.({
+    phase: "probing",
+    detail: { message: "正在快速读取 MP4 元数据" }
+  });
+
+  const maxScanBytes = Math.min(file.size, 16 * 1024 * 1024);
+  const headBytes = new Uint8Array(await file.slice(0, maxScanBytes).arrayBuffer());
+  let probe = parseMp4Probe(headBytes);
+  if (probe) {
+    return probe;
+  }
+
+  if (file.size <= maxScanBytes) {
+    return null;
+  }
+
+  const tailStart = Math.max(0, file.size - maxScanBytes);
+  const tailBytes = new Uint8Array(await file.slice(tailStart, file.size).arrayBuffer());
+  probe = parseMp4Probe(tailBytes);
+  return probe;
+}
+
+function hasMp4LikeExtension(fileName: string): boolean {
+  const extension = fileName.split(".").pop()?.trim().toLowerCase() ?? "";
+  return extension === "mp4" || extension === "m4v" || extension === "mov";
+}
+
+function parseMp4Probe(bytes: Uint8Array): MediaProbeResult | null {
+  const rootBoxes = parseMp4Boxes(bytes, 0, bytes.byteLength);
+  const ftyp = rootBoxes.find((box) => box.type === "ftyp");
+  const moov = rootBoxes.find((box) => box.type === "moov");
+  if (!ftyp || !moov) {
+    return null;
+  }
+
+  const majorBrand = readAscii(bytes, ftyp.payloadStart, Math.min(ftyp.payloadStart + 4, ftyp.end));
+  const compatibleBrands = new Set<string>();
+  for (let offset = ftyp.payloadStart + 8; offset + 4 <= ftyp.end; offset += 4) {
+    compatibleBrands.add(readAscii(bytes, offset, offset + 4));
+  }
+
+  const streams = parseMp4Streams(bytes, moov.payloadStart, moov.end);
+  if (!streams.some((stream) => stream.codecType === "video")) {
+    return null;
+  }
+
+  return {
+    containerFormats: resolveMp4ContainerFormats(majorBrand, compatibleBrands),
+    streams
+  };
+}
+
+interface Mp4Box {
+  type: string;
+  start: number;
+  end: number;
+  payloadStart: number;
+}
+
+function parseMp4Boxes(bytes: Uint8Array, start: number, end: number): Mp4Box[] {
+  const boxes: Mp4Box[] = [];
+  let offset = start;
+  while (offset + 8 <= end) {
+    const size32 = readUint32(bytes, offset);
+    const type = readAscii(bytes, offset + 4, offset + 8);
+    let headerSize = 8;
+    let boxSize = size32;
+    if (size32 === 1) {
+      if (offset + 16 > end) {
+        break;
+      }
+      boxSize = readUint64AsNumber(bytes, offset + 8);
+      headerSize = 16;
+    } else if (size32 === 0) {
+      boxSize = end - offset;
+    }
+    if (boxSize < headerSize || offset + boxSize > end) {
+      break;
+    }
+    boxes.push({
+      type,
+      start: offset,
+      end: offset + boxSize,
+      payloadStart: offset + headerSize
+    });
+    offset += boxSize;
+  }
+  return boxes;
+}
+
+function parseMp4Streams(bytes: Uint8Array, moovStart: number, moovEnd: number): MediaProbeResult["streams"] {
+  const streams: MediaProbeResult["streams"] = [];
+  const tracks = parseMp4Boxes(bytes, moovStart, moovEnd).filter((box) => box.type === "trak");
+  for (const track of tracks) {
+    const handlerType = findMp4HandlerType(bytes, track);
+    const stsd = findNestedMp4Box(bytes, track, ["mdia", "minf", "stbl", "stsd"]);
+    if (!handlerType || !stsd || stsd.payloadStart + 16 > stsd.end) {
+      continue;
+    }
+    const sampleEntryStart = stsd.payloadStart + 8;
+    const sampleEntrySize = readUint32(bytes, sampleEntryStart);
+    if (sampleEntrySize < 8 || sampleEntryStart + sampleEntrySize > stsd.end) {
+      continue;
+    }
+    const sampleEntryType = readAscii(bytes, sampleEntryStart + 4, sampleEntryStart + 8);
+    if (handlerType === "vide") {
+      streams.push({
+        codecType: "video",
+        codecName: sampleEntryType,
+        index: streams.length,
+        width: readUint16(bytes, sampleEntryStart + 32),
+        height: readUint16(bytes, sampleEntryStart + 34)
+      });
+    } else if (handlerType === "soun") {
+      streams.push({
+        codecType: "audio",
+        codecName: sampleEntryType,
+        index: streams.length
+      });
+    }
+  }
+  return streams;
+}
+
+function findMp4HandlerType(bytes: Uint8Array, track: Mp4Box): string | null {
+  const hdlr = findNestedMp4Box(bytes, track, ["mdia", "hdlr"]);
+  if (!hdlr || hdlr.payloadStart + 12 > hdlr.end) {
+    return null;
+  }
+  return readAscii(bytes, hdlr.payloadStart + 8, hdlr.payloadStart + 12);
+}
+
+function findNestedMp4Box(bytes: Uint8Array, root: Mp4Box, path: string[]): Mp4Box | null {
+  let current: Mp4Box | null = root;
+  for (const type of path) {
+    if (!current) {
+      return null;
+    }
+    current = parseMp4Boxes(bytes, current.payloadStart, current.end).find((box) => box.type === type) ?? null;
+  }
+  return current;
+}
+
+function resolveMp4ContainerFormats(majorBrand: string, compatibleBrands: Set<string>): string[] {
+  const brands = new Set([majorBrand, ...compatibleBrands]);
+  if (brands.has("qt  ")) {
+    return ["mov"];
+  }
+  return ["mov", "mp4", "m4a", "3gp", "3g2", "mj2"];
+}
+
+function readUint16(bytes: Uint8Array, offset: number): number {
+  if (offset + 2 > bytes.byteLength) {
+    return 0;
+  }
+  return (bytes[offset] << 8) | bytes[offset + 1];
+}
+
+function readUint32(bytes: Uint8Array, offset: number): number {
+  if (offset + 4 > bytes.byteLength) {
+    return 0;
+  }
+  return ((bytes[offset] * 0x1000000) + ((bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3])) >>> 0;
+}
+
+function readUint64AsNumber(bytes: Uint8Array, offset: number): number {
+  const high = readUint32(bytes, offset);
+  const low = readUint32(bytes, offset + 4);
+  return high * 0x100000000 + low;
+}
+
+function readAscii(bytes: Uint8Array, start: number, end: number): string {
+  let value = "";
+  for (let offset = start; offset < end && offset < bytes.byteLength; offset += 1) {
+    value += String.fromCharCode(bytes[offset]);
+  }
+  return value;
+}
+
 function describeStrategy(strategy: MediaTranscodeStrategy): string {
   const videoStep =
     strategy.videoAction === "copy" ? `视频直接复用(${strategy.videoCodec})` : `视频转 HEVC(HVC1)`;
@@ -263,7 +455,9 @@ function buildTranscodeCommand(inputPath: string, outputPath: string, strategy: 
     );
   }
 
-  command.push("-tag:v", "hvc1");
+  if (strategy.videoAction === "transcode" || strategy.videoCodec === "hevc") {
+    command.push("-tag:v", "hvc1");
+  }
 
   if (strategy.audioAction === "copy") {
     command.push("-c:a", "copy");

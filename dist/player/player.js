@@ -1285,10 +1285,24 @@ var fetchFile = async (file) => {
 
 // src/player/media-compatibility.ts
 var preferredContainerFormats = /* @__PURE__ */ new Set(["mov", "mp4", "m4a", "3gp", "3g2", "mj2"]);
-function buildOutputVideoName(fileName) {
+var browserPlayableVideoCodecs = /* @__PURE__ */ new Set(["hevc", "h264", "avc1"]);
+var hevcSampleEntries = /* @__PURE__ */ new Set(["hvc1", "hev1"]);
+var h264SampleEntries = /* @__PURE__ */ new Set(["avc1", "avc2", "avc3", "avc4"]);
+var aacSampleEntries = /* @__PURE__ */ new Set(["mp4a"]);
+var browserPlayableVideoCodecLabels = /* @__PURE__ */ new Map([
+  ["hevc", "HEVC(HVC1)"],
+  ["h264", "H.264/AVC"],
+  ["avc1", "H.264/AVC"]
+]);
+function buildOutputVideoName(fileName, strategy) {
   const lastDotIndex = fileName.lastIndexOf(".");
   const stem = lastDotIndex === -1 ? fileName : fileName.slice(0, lastDotIndex);
-  return `${stem}.hvc1.aac.mp4`;
+  if (!strategy) {
+    return `${stem}.hvc1.aac.mp4`;
+  }
+  const videoProfile = strategy.videoAction === "copy" ? normalizeOutputCodecSlug(strategy.videoCodec) : "hvc1";
+  const audioProfile = strategy.audioAction === "copy" ? "source-audio" : "aac";
+  return `${stem}.${videoProfile}.${audioProfile}.mp4`;
 }
 function buildMediaTranscodeStrategy(fileName, probe) {
   const resolvedContainerFormats = resolveContainerFormats(fileName, probe.containerFormats);
@@ -1298,15 +1312,21 @@ function buildMediaTranscodeStrategy(fileName, probe) {
     throw new Error("\u8F93\u5165\u6587\u4EF6\u7F3A\u5C11\u89C6\u9891\u6D41\uFF0C\u65E0\u6CD5\u8FDB\u5165\u64AD\u653E\u5668\u3002");
   }
   const containerAction = isPreferredContainer(resolvedContainerFormats) ? "copy" : "remux";
-  const videoAction = videoStream.codecName === "hevc" ? "copy" : "transcode";
-  const audioAction = audioStreams.length === 0 || audioStreams.every((stream) => stream.codecName === "aac") ? "copy" : "transcode";
+  const normalizedVideoCodec = normalizeCodecName(videoStream.codecName);
+  const videoAction = browserPlayableVideoCodecs.has(normalizedVideoCodec) ? "copy" : "transcode";
+  const normalizedAudioCodecs = audioStreams.map((stream) => normalizeCodecName(stream.codecName));
+  const audioAction = normalizedAudioCodecs.length === 0 || normalizedAudioCodecs.every((codecName) => codecName === "aac") ? "copy" : "transcode";
   return {
     containerAction,
     videoAction,
     audioAction,
-    videoCodec: videoStream.codecName,
-    audioCodecs: audioStreams.map((stream) => stream.codecName),
-    outputFileName: buildOutputVideoName(fileName)
+    videoCodec: normalizedVideoCodec,
+    audioCodecs: normalizedAudioCodecs,
+    outputFileName: buildOutputVideoName(fileName, {
+      videoAction,
+      audioAction,
+      videoCodec: normalizedVideoCodec
+    })
   };
 }
 function assessMediaCompatibility(fileName, probe) {
@@ -1316,8 +1336,8 @@ function assessMediaCompatibility(fileName, probe) {
   if (strategy.containerAction === "remux") {
     reasons.push(`\u5C01\u88C5\u683C\u5F0F\u4E3A ${formatContainerFormats(resolvedContainerFormats)}\uFF0C\u4E0D\u5728\u63A8\u8350\u7684 MP4/MOV \u57FA\u7EBF\u5185`);
   }
-  if (strategy.videoAction === "transcode") {
-    reasons.push(`\u89C6\u9891\u7F16\u7801\u4E3A ${strategy.videoCodec}\uFF0C\u4E0D\u662F\u76EE\u6807 HEVC(HVC1)`);
+  if (strategy.videoCodec !== "hevc") {
+    reasons.push(`\u89C6\u9891\u7F16\u7801\u4E3A ${formatVideoCodec(strategy.videoCodec)}\uFF0C\u4E0D\u662F\u76F4\u63A5\u64AD\u653E\u76EE\u6807 HEVC(HVC1)`);
   }
   if (strategy.audioAction === "transcode") {
     reasons.push(`\u97F3\u9891\u7F16\u7801\u4E3A ${formatAudioCodecs(strategy.audioCodecs)}\uFF0C\u4E0D\u662F\u76EE\u6807 AAC`);
@@ -1327,13 +1347,13 @@ function assessMediaCompatibility(fileName, probe) {
       isRecommendedProfile: true,
       reasons,
       summary: "\u5DF2\u547D\u4E2D\u63A8\u8350\u64AD\u653E\u57FA\u7EBF\uFF0C\u5C06\u76F4\u63A5\u8FDB\u5165\u539F\u751F\u64AD\u653E\u5668\u3002",
-      detail: `\u5C01\u88C5 ${formatContainerFormats(resolvedContainerFormats)}\uFF0C\u89C6\u9891 ${strategy.videoCodec}\uFF0C\u97F3\u9891 ${formatAudioCodecs(strategy.audioCodecs)}\u3002`
+      detail: `\u5C01\u88C5 ${formatContainerFormats(resolvedContainerFormats)}\uFF0C\u89C6\u9891 ${formatVideoCodec(strategy.videoCodec)}\uFF0C\u97F3\u9891 ${formatAudioCodecs(strategy.audioCodecs)}\u3002`
     };
   }
   return {
     isRecommendedProfile: false,
     reasons,
-    summary: "\u5F53\u524D\u6587\u4EF6\u504F\u79BB\u63A8\u8350\u7684 HVC1 + AAC \u64AD\u653E\u57FA\u7EBF\uFF0C\u5EFA\u8BAE\u5148\u505A\u672C\u5730\u9884\u5904\u7406\u3002",
+    summary: "\u5F53\u524D\u6587\u4EF6\u504F\u79BB\u63A8\u8350\u64AD\u653E\u57FA\u7EBF\uFF0C\u5EFA\u8BAE\u5148\u505A\u672C\u5730\u9884\u5904\u7406\u3002",
     detail: reasons.join("\uFF1B")
   };
 }
@@ -1348,6 +1368,33 @@ function resolveContainerFormatsForDisplay(fileName, containerFormats) {
 }
 function isPreferredContainer(containerFormats) {
   return containerFormats.some((format) => preferredContainerFormats.has(format));
+}
+function normalizeCodecName(codecName) {
+  const normalized = codecName.trim().toLowerCase();
+  if (hevcSampleEntries.has(normalized)) {
+    return "hevc";
+  }
+  if (h264SampleEntries.has(normalized)) {
+    return "h264";
+  }
+  if (aacSampleEntries.has(normalized)) {
+    return "aac";
+  }
+  return normalized;
+}
+function normalizeOutputCodecSlug(codecName) {
+  const normalized = normalizeCodecName(codecName);
+  if (normalized === "hevc") {
+    return "hvc1";
+  }
+  if (normalized === "h264" || normalized === "avc1") {
+    return "avc1";
+  }
+  return normalized.replaceAll(/[^a-z0-9]+/g, "-").replaceAll(/^-|-$/g, "") || "video";
+}
+function formatVideoCodec(codecName) {
+  const normalized = normalizeCodecName(codecName);
+  return browserPlayableVideoCodecLabels.get(normalized) ?? codecName;
 }
 function resolveContainerFormats(fileName, containerFormats) {
   if (containerFormats.length > 0) {
@@ -1412,6 +1459,10 @@ var BrowserFfmpegService = class {
     });
   }
   async inspectFile(file, handlers = {}) {
+    const fastProbe = await inspectMp4ContainerFromFile(file, handlers);
+    if (fastProbe) {
+      return fastProbe;
+    }
     await this.ensureLoaded(handlers);
     const jobKey = crypto.randomUUID();
     const inputPath = `${jobKey}-${sanitizeFileName(file.name)}`;
@@ -1525,6 +1576,164 @@ var BrowserFfmpegService = class {
     });
   }
 };
+async function inspectMp4ContainerFromFile(file, handlers) {
+  if (!hasMp4LikeExtension(file.name)) {
+    return null;
+  }
+  handlers.onStatusChange?.({
+    phase: "probing",
+    detail: { message: "\u6B63\u5728\u5FEB\u901F\u8BFB\u53D6 MP4 \u5143\u6570\u636E" }
+  });
+  const maxScanBytes = Math.min(file.size, 16 * 1024 * 1024);
+  const headBytes = new Uint8Array(await file.slice(0, maxScanBytes).arrayBuffer());
+  let probe = parseMp4Probe(headBytes);
+  if (probe) {
+    return probe;
+  }
+  if (file.size <= maxScanBytes) {
+    return null;
+  }
+  const tailStart = Math.max(0, file.size - maxScanBytes);
+  const tailBytes = new Uint8Array(await file.slice(tailStart, file.size).arrayBuffer());
+  probe = parseMp4Probe(tailBytes);
+  return probe;
+}
+function hasMp4LikeExtension(fileName) {
+  const extension = fileName.split(".").pop()?.trim().toLowerCase() ?? "";
+  return extension === "mp4" || extension === "m4v" || extension === "mov";
+}
+function parseMp4Probe(bytes) {
+  const rootBoxes = parseMp4Boxes(bytes, 0, bytes.byteLength);
+  const ftyp = rootBoxes.find((box) => box.type === "ftyp");
+  const moov = rootBoxes.find((box) => box.type === "moov");
+  if (!ftyp || !moov) {
+    return null;
+  }
+  const majorBrand = readAscii(bytes, ftyp.payloadStart, Math.min(ftyp.payloadStart + 4, ftyp.end));
+  const compatibleBrands = /* @__PURE__ */ new Set();
+  for (let offset = ftyp.payloadStart + 8; offset + 4 <= ftyp.end; offset += 4) {
+    compatibleBrands.add(readAscii(bytes, offset, offset + 4));
+  }
+  const streams = parseMp4Streams(bytes, moov.payloadStart, moov.end);
+  if (!streams.some((stream) => stream.codecType === "video")) {
+    return null;
+  }
+  return {
+    containerFormats: resolveMp4ContainerFormats(majorBrand, compatibleBrands),
+    streams
+  };
+}
+function parseMp4Boxes(bytes, start, end) {
+  const boxes = [];
+  let offset = start;
+  while (offset + 8 <= end) {
+    const size32 = readUint32(bytes, offset);
+    const type = readAscii(bytes, offset + 4, offset + 8);
+    let headerSize = 8;
+    let boxSize = size32;
+    if (size32 === 1) {
+      if (offset + 16 > end) {
+        break;
+      }
+      boxSize = readUint64AsNumber(bytes, offset + 8);
+      headerSize = 16;
+    } else if (size32 === 0) {
+      boxSize = end - offset;
+    }
+    if (boxSize < headerSize || offset + boxSize > end) {
+      break;
+    }
+    boxes.push({
+      type,
+      start: offset,
+      end: offset + boxSize,
+      payloadStart: offset + headerSize
+    });
+    offset += boxSize;
+  }
+  return boxes;
+}
+function parseMp4Streams(bytes, moovStart, moovEnd) {
+  const streams = [];
+  const tracks = parseMp4Boxes(bytes, moovStart, moovEnd).filter((box) => box.type === "trak");
+  for (const track of tracks) {
+    const handlerType = findMp4HandlerType(bytes, track);
+    const stsd = findNestedMp4Box(bytes, track, ["mdia", "minf", "stbl", "stsd"]);
+    if (!handlerType || !stsd || stsd.payloadStart + 16 > stsd.end) {
+      continue;
+    }
+    const sampleEntryStart = stsd.payloadStart + 8;
+    const sampleEntrySize = readUint32(bytes, sampleEntryStart);
+    if (sampleEntrySize < 8 || sampleEntryStart + sampleEntrySize > stsd.end) {
+      continue;
+    }
+    const sampleEntryType = readAscii(bytes, sampleEntryStart + 4, sampleEntryStart + 8);
+    if (handlerType === "vide") {
+      streams.push({
+        codecType: "video",
+        codecName: sampleEntryType,
+        index: streams.length,
+        width: readUint16(bytes, sampleEntryStart + 32),
+        height: readUint16(bytes, sampleEntryStart + 34)
+      });
+    } else if (handlerType === "soun") {
+      streams.push({
+        codecType: "audio",
+        codecName: sampleEntryType,
+        index: streams.length
+      });
+    }
+  }
+  return streams;
+}
+function findMp4HandlerType(bytes, track) {
+  const hdlr = findNestedMp4Box(bytes, track, ["mdia", "hdlr"]);
+  if (!hdlr || hdlr.payloadStart + 12 > hdlr.end) {
+    return null;
+  }
+  return readAscii(bytes, hdlr.payloadStart + 8, hdlr.payloadStart + 12);
+}
+function findNestedMp4Box(bytes, root, path) {
+  let current = root;
+  for (const type of path) {
+    if (!current) {
+      return null;
+    }
+    current = parseMp4Boxes(bytes, current.payloadStart, current.end).find((box) => box.type === type) ?? null;
+  }
+  return current;
+}
+function resolveMp4ContainerFormats(majorBrand, compatibleBrands) {
+  const brands = /* @__PURE__ */ new Set([majorBrand, ...compatibleBrands]);
+  if (brands.has("qt  ")) {
+    return ["mov"];
+  }
+  return ["mov", "mp4", "m4a", "3gp", "3g2", "mj2"];
+}
+function readUint16(bytes, offset) {
+  if (offset + 2 > bytes.byteLength) {
+    return 0;
+  }
+  return bytes[offset] << 8 | bytes[offset + 1];
+}
+function readUint32(bytes, offset) {
+  if (offset + 4 > bytes.byteLength) {
+    return 0;
+  }
+  return bytes[offset] * 16777216 + (bytes[offset + 1] << 16 | bytes[offset + 2] << 8 | bytes[offset + 3]) >>> 0;
+}
+function readUint64AsNumber(bytes, offset) {
+  const high = readUint32(bytes, offset);
+  const low = readUint32(bytes, offset + 4);
+  return high * 4294967296 + low;
+}
+function readAscii(bytes, start, end) {
+  let value = "";
+  for (let offset = start; offset < end && offset < bytes.byteLength; offset += 1) {
+    value += String.fromCharCode(bytes[offset]);
+  }
+  return value;
+}
 function describeStrategy(strategy) {
   const videoStep = strategy.videoAction === "copy" ? `\u89C6\u9891\u76F4\u63A5\u590D\u7528(${strategy.videoCodec})` : `\u89C6\u9891\u8F6C HEVC(HVC1)`;
   const audioStep = strategy.audioAction === "copy" ? `\u97F3\u9891\u76F4\u63A5\u590D\u7528(${strategy.audioCodecs.length > 0 ? strategy.audioCodecs.join(", ") : "none"})` : `\u97F3\u9891\u8F6C AAC`;
@@ -1549,7 +1758,9 @@ function buildTranscodeCommand(inputPath, outputPath, strategy) {
       ENCODING_PROFILE.pixelFormat
     );
   }
-  command.push("-tag:v", "hvc1");
+  if (strategy.videoAction === "transcode" || strategy.videoCodec === "hevc") {
+    command.push("-tag:v", "hvc1");
+  }
   if (strategy.audioAction === "copy") {
     command.push("-c:a", "copy");
   } else {
@@ -2251,7 +2462,7 @@ function describeVideoProbe(fileName, probe) {
   const videoStream = probe.streams.find((stream) => stream.codecType === "video");
   const audioStreams = probe.streams.filter((stream) => stream.codecType === "audio");
   const container = formatContainerFormats(resolveContainerFormatsForDisplay(fileName, probe.containerFormats));
-  const video = videoStream ? `${videoStream.codecName}${videoStream.width && videoStream.height ? ` ${videoStream.width}x${videoStream.height}` : ""}` : "none";
+  const video = videoStream ? `${formatVideoCodec(videoStream.codecName)}${videoStream.width && videoStream.height ? ` ${videoStream.width}x${videoStream.height}` : ""}` : "none";
   const audio = formatAudioCodecs(audioStreams.map((stream) => stream.codecName));
   return {
     container,
@@ -2262,7 +2473,7 @@ function describeVideoProbe(fileName, probe) {
 }
 function describeTranscodePlan(strategy) {
   const containerStep = strategy.containerAction === "copy" ? "\u5C01\u88C5\u65E0\u9700\u91CD\u505A" : "\u91CD\u5C01\u88C5\u5230 MP4";
-  const videoStep = strategy.videoAction === "copy" ? `\u89C6\u9891\u590D\u7528 ${strategy.videoCodec}` : "\u89C6\u9891\u8F6C HEVC(HVC1)";
+  const videoStep = strategy.videoAction === "copy" ? `\u89C6\u9891\u590D\u7528 ${formatVideoCodec(strategy.videoCodec)}` : "\u89C6\u9891\u8F6C HEVC(HVC1)";
   const audioStep = strategy.audioAction === "copy" ? `\u97F3\u9891\u590D\u7528 ${formatAudioCodecs(strategy.audioCodecs)}` : `\u97F3\u9891\u8F6C AAC\uFF08\u5F53\u524D ${formatAudioCodecs(strategy.audioCodecs)}\uFF09`;
   return `${containerStep}\uFF1B${videoStep}\uFF1B${audioStep}`;
 }
@@ -2394,6 +2605,8 @@ async function loadVideoFile(file) {
     elements.processingText.textContent = assessment.summary;
     elements.processingProgress.value = assessment.isRecommendedProfile ? 100 : 0;
     if (assessment.isRecommendedProfile) {
+      videoInspectionBusy = false;
+      updateVideoDecisionControls();
       await playOriginalVideoFile({ enterPlayer: true });
     }
   } catch (error) {
@@ -2419,6 +2632,7 @@ async function playOriginalVideoFile(options) {
   currentVideoVariant = "original";
   elements.video.src = videoObjectUrl;
   elements.video.load();
+  await waitForVideoMetadata();
   elements.playerVideoPill.textContent = `\u89C6\u9891\uFF1A${sourceVideoFile.name}`;
   elements.playerNote.textContent = sourceVideoAssessment?.isRecommendedProfile ? "\u5DF2\u547D\u4E2D\u63A8\u8350\u64AD\u653E\u57FA\u7EBF\uFF0C\u5F00\u59CB\u540C\u6B65 reader \u9875\u9762\u3002" : "\u6B63\u5728\u8BD5\u64AD\u539F\u59CB\u6587\u4EF6\uFF0C\u82E5\u5931\u8D25\u8BF7\u8FD4\u56DE\u4E00\u952E\u5904\u7406\u3002";
   elements.playerStatus.textContent = sourceVideoAssessment?.isRecommendedProfile ? "\u89C6\u9891\u53EF\u76F4\u63A5\u64AD\u653E\u3002" : "\u6B63\u5728\u8BD5\u64AD\u539F\u59CB\u6587\u4EF6\uFF1B\u5982\u65E0\u58F0\u6216\u9ED1\u5C4F\uFF0C\u8BF7\u5207\u6362\u4E0B\u4E00\u96C6\u540E\u91CD\u65B0\u4E00\u952E\u5904\u7406\u3002";
@@ -2433,10 +2647,41 @@ async function playProcessedVideoFile() {
   currentVideoVariant = "processed";
   elements.video.src = processedVideoObjectUrl;
   elements.video.load();
+  await waitForVideoMetadata();
   elements.playerVideoPill.textContent = `\u89C6\u9891\uFF1A${processedVideoFile.name}`;
   elements.playerNote.textContent = "\u5DF2\u5B8C\u6210\u517C\u5BB9\u5904\u7406\uFF0C\u5F00\u59CB\u540C\u6B65 reader \u9875\u9762\u3002";
   elements.playerStatus.textContent = "\u517C\u5BB9\u5224\u65AD\u5B8C\u6210\uFF0C\u53EF\u4EE5\u64AD\u653E\u3001\u8C03\u901F\u3001\u6C89\u6D78\u6216\u5207\u6362\u753B\u4E2D\u753B\u3002";
   setView("player");
+}
+function waitForVideoMetadata(timeoutMs = 12e3) {
+  if (elements.video.readyState >= HTMLMediaElement.HAVE_METADATA && Number.isFinite(elements.video.duration)) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("\u89C6\u9891\u6587\u4EF6\u5DF2\u751F\u6210\uFF0C\u4F46\u6D4F\u89C8\u5668\u672A\u80FD\u8BFB\u53D6 metadata\uFF0C\u8BF7\u8FD4\u56DE\u4F7F\u7528\u539F\u6587\u4EF6\u8BD5\u64AD\u6216\u91CD\u65B0\u5904\u7406\u3002"));
+    }, timeoutMs);
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      elements.video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      elements.video.removeEventListener("error", handleError);
+    };
+    const handleLoadedMetadata = () => {
+      if (!Number.isFinite(elements.video.duration)) {
+        return;
+      }
+      cleanup();
+      resolve();
+    };
+    const handleError = () => {
+      cleanup();
+      const message = elements.video.error?.message || `\u6D4F\u89C8\u5668\u65E0\u6CD5\u8BFB\u53D6\u5904\u7406\u540E\u89C6\u9891\uFF0C\u9519\u8BEF\u7801 ${elements.video.error?.code ?? "unknown"}\u3002`;
+      reject(new Error(message));
+    };
+    elements.video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    elements.video.addEventListener("error", handleError);
+  });
 }
 async function preprocessVideoFile() {
   if (!sourceVideoFile || !sourceVideoProbe || !sourceVideoStrategy) {
@@ -2480,6 +2725,11 @@ async function preprocessVideoFile() {
     elements.videoPlan.textContent = "\u5DF2\u751F\u6210\u517C\u5BB9\u7248\u672C";
     setProcessingProgress(`\u5DF2\u751F\u6210 ${result.file.name}\uFF0C\u6B63\u5728\u8FDB\u5165\u64AD\u653E\u3002`, 1);
     await playProcessedVideoFile();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    elements.processingText.textContent = message;
+    elements.playerStatus.textContent = message;
+    throw error;
   } finally {
     videoTranscodeBusy = false;
     updateVideoDecisionControls();

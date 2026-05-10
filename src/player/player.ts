@@ -30,6 +30,7 @@ import {
   buildMediaTranscodeStrategy,
   formatAudioCodecs,
   formatContainerFormats,
+  formatVideoCodec,
   resolveContainerFormatsForDisplay,
   type MediaCompatibilityAssessment,
   type MediaProbeResult,
@@ -674,7 +675,7 @@ function describeVideoProbe(fileName: string, probe: MediaProbeResult): {
   const audioStreams = probe.streams.filter((stream) => stream.codecType === "audio");
   const container = formatContainerFormats(resolveContainerFormatsForDisplay(fileName, probe.containerFormats));
   const video = videoStream
-    ? `${videoStream.codecName}${videoStream.width && videoStream.height ? ` ${videoStream.width}x${videoStream.height}` : ""}`
+    ? `${formatVideoCodec(videoStream.codecName)}${videoStream.width && videoStream.height ? ` ${videoStream.width}x${videoStream.height}` : ""}`
     : "none";
   const audio = formatAudioCodecs(audioStreams.map((stream) => stream.codecName));
   return {
@@ -687,7 +688,7 @@ function describeVideoProbe(fileName: string, probe: MediaProbeResult): {
 
 function describeTranscodePlan(strategy: MediaTranscodeStrategy): string {
   const containerStep = strategy.containerAction === "copy" ? "封装无需重做" : "重封装到 MP4";
-  const videoStep = strategy.videoAction === "copy" ? `视频复用 ${strategy.videoCodec}` : "视频转 HEVC(HVC1)";
+  const videoStep = strategy.videoAction === "copy" ? `视频复用 ${formatVideoCodec(strategy.videoCodec)}` : "视频转 HEVC(HVC1)";
   const audioStep =
     strategy.audioAction === "copy"
       ? `音频复用 ${formatAudioCodecs(strategy.audioCodecs)}`
@@ -838,6 +839,8 @@ async function loadVideoFile(file: File): Promise<void> {
     elements.processingText.textContent = assessment.summary;
     elements.processingProgress.value = assessment.isRecommendedProfile ? 100 : 0;
     if (assessment.isRecommendedProfile) {
+      videoInspectionBusy = false;
+      updateVideoDecisionControls();
       await playOriginalVideoFile({ enterPlayer: true });
     }
   } catch (error) {
@@ -864,6 +867,7 @@ async function playOriginalVideoFile(options?: { enterPlayer?: boolean }): Promi
   currentVideoVariant = "original";
   elements.video.src = videoObjectUrl;
   elements.video.load();
+  await waitForVideoMetadata();
   elements.playerVideoPill.textContent = `视频：${sourceVideoFile.name}`;
   elements.playerNote.textContent = sourceVideoAssessment?.isRecommendedProfile
     ? "已命中推荐播放基线，开始同步 reader 页面。"
@@ -883,10 +887,47 @@ async function playProcessedVideoFile(): Promise<void> {
   currentVideoVariant = "processed";
   elements.video.src = processedVideoObjectUrl;
   elements.video.load();
+  await waitForVideoMetadata();
   elements.playerVideoPill.textContent = `视频：${processedVideoFile.name}`;
   elements.playerNote.textContent = "已完成兼容处理，开始同步 reader 页面。";
   elements.playerStatus.textContent = "兼容判断完成，可以播放、调速、沉浸或切换画中画。";
   setView("player");
+}
+
+function waitForVideoMetadata(timeoutMs = 12000): Promise<void> {
+  if (elements.video.readyState >= HTMLMediaElement.HAVE_METADATA && Number.isFinite(elements.video.duration)) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("视频文件已生成，但浏览器未能读取 metadata，请返回使用原文件试播或重新处理。"));
+    }, timeoutMs);
+
+    const cleanup = (): void => {
+      window.clearTimeout(timeout);
+      elements.video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      elements.video.removeEventListener("error", handleError);
+    };
+
+    const handleLoadedMetadata = (): void => {
+      if (!Number.isFinite(elements.video.duration)) {
+        return;
+      }
+      cleanup();
+      resolve();
+    };
+
+    const handleError = (): void => {
+      cleanup();
+      const message = elements.video.error?.message || `浏览器无法读取处理后视频，错误码 ${elements.video.error?.code ?? "unknown"}。`;
+      reject(new Error(message));
+    };
+
+    elements.video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    elements.video.addEventListener("error", handleError);
+  });
 }
 
 async function preprocessVideoFile(): Promise<void> {
@@ -933,6 +974,11 @@ async function preprocessVideoFile(): Promise<void> {
     elements.videoPlan.textContent = "已生成兼容版本";
     setProcessingProgress(`已生成 ${result.file.name}，正在进入播放。`, 1);
     await playProcessedVideoFile();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    elements.processingText.textContent = message;
+    elements.playerStatus.textContent = message;
+    throw error;
   } finally {
     videoTranscodeBusy = false;
     updateVideoDecisionControls();
