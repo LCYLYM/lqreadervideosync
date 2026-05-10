@@ -1,4 +1,10 @@
 import type { AimReadPageContext, ArticleParagraph, PlaybackState } from "../shared/protocol";
+import {
+  playerThemeStorageKey,
+  resolveReaderSyncThemeMode,
+  sanitizeReaderSyncThemeMode,
+  type ReaderSyncThemeMode
+} from "../shared/theme";
 
 const MARKER_ATTRIBUTE = "data-reader-sync-paragraph-index";
 const STYLE_ELEMENT_ID = "reader-sync-style";
@@ -184,16 +190,14 @@ function ensureStyle(): void {
       --rs-dot-idle-halo: rgba(154, 150, 140, 0.18);
     }
 
-    @media (prefers-color-scheme: dark) {
-      #${STATUS_OVERLAY_ID} {
-        --rs-surface: rgba(30, 28, 24, 0.94);
-        --rs-ink: #f0e9dc;
-        --rs-ink-muted: rgba(240, 233, 220, 0.72);
-        --rs-line: rgba(255, 248, 236, 0.12);
-        --rs-shadow: 0 16px 40px rgba(0, 0, 0, 0.48);
-        --rs-dot-idle: #7a746a;
-        --rs-dot-idle-halo: rgba(122, 116, 106, 0.24);
-      }
+    #${STATUS_OVERLAY_ID}[data-theme="dark"] {
+      --rs-surface: rgba(30, 28, 24, 0.94);
+      --rs-ink: #f0e9dc;
+      --rs-ink-muted: rgba(240, 233, 220, 0.72);
+      --rs-line: rgba(255, 248, 236, 0.12);
+      --rs-shadow: 0 16px 40px rgba(0, 0, 0, 0.48);
+      --rs-dot-idle: #7a746a;
+      --rs-dot-idle-halo: rgba(122, 116, 106, 0.24);
     }
 
     [${MARKER_ATTRIBUTE}] {
@@ -520,20 +524,35 @@ export class AimReadDomController {
   private currentTitle = document.title;
   private visibleParagraphCount = 0;
   private overlayMode: OverlayMode = "expanded";
+  private themeMode: ReaderSyncThemeMode = "auto";
+  private readonly themeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
   constructor() {
     ensureStyle();
     this.statusOverlay = this.ensureStatusOverlay();
     this.statusOverlayElements = this.ensureStatusOverlayElements();
     void this.loadOverlayMode();
+    void this.loadThemeMode();
+    this.themeMediaQuery.addEventListener("change", () => {
+      if (this.themeMode === "auto") {
+        this.applyThemeMode();
+      }
+    });
     chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName !== "local" || !(OVERLAY_MODE_STORAGE_KEY in changes)) {
+      if (areaName !== "local") {
         return;
       }
-      this.overlayMode = sanitizeOverlayMode(changes[OVERLAY_MODE_STORAGE_KEY]?.newValue);
-      this.renderStatusOverlay();
+      if (OVERLAY_MODE_STORAGE_KEY in changes) {
+        this.overlayMode = sanitizeOverlayMode(changes[OVERLAY_MODE_STORAGE_KEY]?.newValue);
+        this.renderStatusOverlay();
+      }
+      if (playerThemeStorageKey in changes) {
+        this.themeMode = sanitizeReaderSyncThemeMode(changes[playerThemeStorageKey]?.newValue);
+        this.applyThemeMode();
+      }
     });
     this.renderStatusOverlay();
+    this.applyThemeMode();
   }
 
   collectPageContext(): AimReadPageContext | null {
@@ -642,6 +661,8 @@ export class AimReadDomController {
     overlay.id = STATUS_OVERLAY_ID;
     overlay.setAttribute("aria-live", "polite");
     overlay.dataset.overlayMode = this.overlayMode;
+    overlay.dataset.theme = resolveReaderSyncThemeMode(this.themeMode, this.themeMediaQuery.matches);
+    overlay.dataset.themeMode = this.themeMode;
     document.documentElement.append(overlay);
     return overlay;
   }
@@ -746,6 +767,21 @@ export class AimReadDomController {
     }
   }
 
+  private async loadThemeMode(): Promise<void> {
+    try {
+      const stored = await chrome.storage.local.get(playerThemeStorageKey);
+      this.themeMode = sanitizeReaderSyncThemeMode(stored[playerThemeStorageKey]);
+    } catch {
+      this.themeMode = "auto";
+    }
+    this.applyThemeMode();
+  }
+
+  private applyThemeMode(): void {
+    this.statusOverlay.dataset.theme = resolveReaderSyncThemeMode(this.themeMode, this.themeMediaQuery.matches);
+    this.statusOverlay.dataset.themeMode = this.themeMode;
+  }
+
   private async setOverlayMode(nextMode: OverlayMode): Promise<void> {
     if (this.overlayMode === nextMode) {
       return;
@@ -821,6 +857,7 @@ export class AimReadDomController {
   private renderStatusOverlay(): void {
     this.statusOverlay.dataset.playerState = this.playerState ?? "idle";
     this.statusOverlay.dataset.overlayMode = this.overlayMode;
+    this.applyThemeMode();
     const stateLabel = playbackStateLabel(this.playerState);
     const activeParagraphLabel = this.activeParagraphIndex === null ? "-" : `#${this.activeParagraphIndex}`;
     const {

@@ -38,7 +38,7 @@ const videoPath = path.resolve(
 const extensionDistPath = path.resolve(extensionRoot, args.get("extension-dist") ?? "dist");
 const userDataDir = path.resolve(
   extensionRoot,
-  args.get("user-data-dir") ?? ".tmp/playwright-extension-profile"
+  args.get("user-data-dir") ?? ".tmp/aim-read-auth-profile"
 );
 const authStatePath = path.resolve(
   extensionRoot,
@@ -433,6 +433,7 @@ async function main() {
       channel: browserChannel,
       executablePath: browserExecutablePath ?? undefined,
       headless: false,
+      storageState: hasSavedAuthState ? authStatePath : undefined,
       args: [
         `--disable-extensions-except=${extensionDistPath}`,
         `--load-extension=${extensionDistPath}`,
@@ -441,7 +442,6 @@ async function main() {
     });
 
     if (hasSavedAuthState) {
-      await context.setStorageState(authStatePath);
       log("Restored auth state", { authStatePath });
     }
 

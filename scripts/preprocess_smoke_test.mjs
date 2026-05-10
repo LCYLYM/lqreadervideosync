@@ -55,27 +55,25 @@ async function fileExists(filePath) {
 async function captureSnapshot(page) {
   return page.evaluate(() => {
     const video = document.querySelector("video");
-    const preprocessButton = document.querySelector("#preprocess-video");
-    const playProcessedButton = document.querySelector("#play-processed-video");
-    const downloadButton = document.querySelector("#download-processed-video");
-    const progressBar = document.querySelector("#video-processing-progress-bar");
+    const processButton = document.querySelector("#process-play");
+    const riskButton = document.querySelector("#risk-play");
+    const progressBar = document.querySelector("#processing-progress");
     return {
-      statusText: document.querySelector("#status-text")?.textContent?.trim() ?? null,
+      readerStatus: document.querySelector("#reader-status-text")?.textContent?.trim() ?? null,
       videoName: document.querySelector("#video-name")?.textContent?.trim() ?? null,
-      compatibilityStatus: document.querySelector("#video-compatibility-status")?.textContent?.trim() ?? null,
-      compatibilitySummary: document.querySelector("#video-compatibility-summary")?.textContent?.trim() ?? null,
-      transcodePlan: document.querySelector("#video-transcode-plan")?.textContent?.trim() ?? null,
-      processingStatus: document.querySelector("#video-processing-status")?.textContent?.trim() ?? null,
-      processingProgress: document.querySelector("#video-processing-progress")?.textContent?.trim() ?? null,
+      videoContainer: document.querySelector("#video-container")?.textContent?.trim() ?? null,
+      videoCodec: document.querySelector("#video-codec")?.textContent?.trim() ?? null,
+      audioCodec: document.querySelector("#audio-codec")?.textContent?.trim() ?? null,
+      transcodePlan: document.querySelector("#video-plan")?.textContent?.trim() ?? null,
       processingProgressValue: progressBar instanceof HTMLProgressElement ? progressBar.value : null,
-      processingNote: document.querySelector("#video-processing-note")?.textContent?.trim() ?? null,
-      preprocessDisabled: preprocessButton instanceof HTMLButtonElement ? preprocessButton.disabled : null,
-      playProcessedDisabled: playProcessedButton instanceof HTMLButtonElement ? playProcessedButton.disabled : null,
-      downloadDisabled: downloadButton instanceof HTMLButtonElement ? downloadButton.disabled : null,
+      processingText: document.querySelector("#processing-text")?.textContent?.trim() ?? null,
+      processDisabled: processButton instanceof HTMLButtonElement ? processButton.disabled : null,
+      riskDisabled: riskButton instanceof HTMLButtonElement ? riskButton.disabled : null,
+      playerActive: document.querySelector("#player-view")?.classList.contains("is-active") ?? false,
+      playerStatus: document.querySelector("#player-status")?.textContent?.trim() ?? null,
       currentSrc: video instanceof HTMLVideoElement ? video.currentSrc : null,
       readyState: video instanceof HTMLVideoElement ? video.readyState : null,
-      duration: video instanceof HTMLVideoElement && Number.isFinite(video.duration) ? video.duration : null,
-      logOutput: document.querySelector("#log-output")?.textContent?.slice(0, 5000) ?? null
+      duration: video instanceof HTMLVideoElement && Number.isFinite(video.duration) ? video.duration : null
     };
   });
 }
@@ -120,29 +118,28 @@ async function main() {
 
     await page.goto(playerUrl, { waitUntil: "domcontentloaded" });
     log("Player page opened", { playerUrl, videoPath });
-    await closeTutorialIfVisible(page);
+    await page.waitForSelector("#video-file", { state: "attached", timeout: 30000 });
+    await page.click("#to-video").catch(() => {});
     await page.setInputFiles("#video-file", videoPath);
     await page.waitForFunction(() => {
-      const status = document.querySelector("#video-compatibility-status")?.textContent?.trim() ?? "";
-      const preprocessButton = document.querySelector("#preprocess-video");
-      return status === "检测到兼容风险" && preprocessButton instanceof HTMLButtonElement && !preprocessButton.disabled;
+      const plan = document.querySelector("#video-plan")?.textContent?.trim() ?? "";
+      const processButton = document.querySelector("#process-play");
+      return plan.includes("AAC") && processButton instanceof HTMLButtonElement && !processButton.disabled;
     }, null, { timeout: 120000 });
     log("Preprocess action became available", await captureSnapshot(page));
 
-    await closeTutorialIfVisible(page);
-    await page.click("#preprocess-video");
+    await page.evaluate(() => {
+      document.querySelector("#subtitle-view")?.classList.remove("is-active");
+      document.querySelector("#video-view")?.classList.add("is-active");
+    });
+    await page.click("#process-play");
     await page.waitForFunction(() => {
-      const status = document.querySelector("#video-processing-status")?.textContent?.trim() ?? "";
-      const note = document.querySelector("#video-processing-note")?.textContent?.trim() ?? "";
-      const progress = document.querySelector("#video-processing-progress")?.textContent?.trim() ?? "";
-      const playProcessedButton = document.querySelector("#play-processed-video");
+      const progress = document.querySelector("#processing-progress");
       const video = document.querySelector("video");
       return (
-        status === "预处理完成" &&
-        progress === "100%" &&
-        note.includes("已生成") &&
-        playProcessedButton instanceof HTMLButtonElement &&
-        !playProcessedButton.disabled &&
+        progress instanceof HTMLProgressElement &&
+        progress.value === 100 &&
+        document.querySelector("#player-view")?.classList.contains("is-active") &&
         video instanceof HTMLVideoElement &&
         video.currentSrc.startsWith("blob:")
       );
@@ -153,29 +150,12 @@ async function main() {
     if (!completedSnapshot.videoName?.includes(".hvc1.aac.mp4")) {
       throw new Error(`Processed video name did not use expected output profile: ${completedSnapshot.videoName}`);
     }
-    if (completedSnapshot.processingProgress !== "100%") {
-      throw new Error(`Expected 100% only after completion, got ${completedSnapshot.processingProgress}`);
+    if (completedSnapshot.processingProgressValue !== 100) {
+      throw new Error(`Expected 100% only after completion, got ${completedSnapshot.processingProgressValue}`);
     }
   } finally {
     await context.close();
   }
-}
-
-async function closeTutorialIfVisible(page) {
-  const tutorialVisible = await page.waitForFunction(() => {
-    const overlay = document.querySelector("#tutorial-overlay");
-    return overlay instanceof HTMLElement && !overlay.hidden && overlay.getAttribute("aria-hidden") !== "true";
-  }, null, { timeout: 3000 }).then(() => true).catch(() => false);
-  if (!tutorialVisible) {
-    return;
-  }
-
-  await page.click("#tutorial-close");
-  await page.waitForFunction(() => {
-    const overlay = document.querySelector("#tutorial-overlay");
-    return !(overlay instanceof HTMLElement) || overlay.hidden || overlay.getAttribute("aria-hidden") === "true";
-  }, null, { timeout: 10000 });
-  log("Closed first-run tutorial overlay for smoke flow");
 }
 
 async function resolveExtensionId(context, unpackedExtensionPath) {

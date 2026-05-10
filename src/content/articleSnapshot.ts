@@ -56,6 +56,10 @@ function resolveArticleIdFromUrl(): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function isNonArticlePageError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("当前页面不是可识别的 aim-read 剧集文章页");
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -464,7 +468,13 @@ export async function collectCompleteArticleSnapshot(): Promise<AimReadArticleSn
     return await collectArticleSnapshotFromApi();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logger.warn(`Article snapshot API collection failed, falling back to auto scroll: ${message}`);
+    if (isNonArticlePageError(error)) {
+      logger.debug("Skipping article snapshot API collection on non-reader page", {
+        articleUrl: window.location.href
+      });
+    } else {
+      logger.warn(`Article snapshot API collection failed, falling back to auto scroll: ${message}`);
+    }
     return collectArticleSnapshotByAutoScroll();
   }
 }

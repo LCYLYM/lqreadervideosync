@@ -70,7 +70,7 @@ function handleContentPortDisconnect(disconnectedPort: chrome.runtime.Port): voi
   if (contentPageUnloading) {
     return;
   }
-  logger.warn("Content port disconnected, scheduling reconnect");
+  logger.debug("Content port disconnected, scheduling reconnect");
   scheduleContentPortReconnect();
 }
 

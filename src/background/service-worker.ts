@@ -191,6 +191,14 @@ async function collectPreferredArticleSnapshot(targetTabId: number | null): Prom
     logger.warn("Skipping article snapshot request because no target reader tab is available");
     return;
   }
+  const targetTab = await chrome.tabs.get(targetTabId).catch(() => null);
+  if (!isAimReadArticleUrl(targetTab?.url)) {
+    logger.debug("Skipping article snapshot request for non-article aim-read tab", {
+      targetTabId,
+      url: targetTab?.url ?? null
+    });
+    return;
+  }
   logger.info("Requesting article snapshot from reader tab", { targetTabId });
   await postMessageToReaderTab(targetTabId, { type: "COLLECT_ARTICLE_SNAPSHOT" });
 }
