@@ -1,4 +1,4 @@
-import { createLogger } from "../shared/logger";
+import { createLogger, setReaderSyncLogSink } from "../shared/logger";
 import {
   type AimReadArticleSnapshot,
   type AimReadPageContext,
@@ -76,6 +76,7 @@ function requireElement<T extends Element>(selector: string): T {
 }
 
 const elements = {
+  exportLogs: requireElement<HTMLButtonElement>("#export-logs"),
   themeToggle: requireElement<HTMLButtonElement>("#theme-toggle"),
   readerStatusPill: requireElement<HTMLElement>("#reader-status-pill"),
   readerStatusText: requireElement<HTMLElement>("#reader-status-text"),
@@ -127,7 +128,14 @@ const elements = {
   playerReaderPill: requireElement<HTMLElement>("#player-reader-pill"),
   riskDialog: requireElement<HTMLDialogElement>("#risk-dialog"),
   cancelRisk: requireElement<HTMLButtonElement>("#cancel-risk"),
-  confirmRisk: requireElement<HTMLButtonElement>("#confirm-risk")
+  confirmRisk: requireElement<HTMLButtonElement>("#confirm-risk"),
+  feedbackDialog: requireElement<HTMLDialogElement>("#feedback-dialog"),
+  feedbackForm: requireElement<HTMLFormElement>("#feedback-form"),
+  feedbackDescription: requireElement<HTMLTextAreaElement>("#feedback-description"),
+  feedbackIncludeScreenshot: requireElement<HTMLInputElement>("#feedback-include-screenshot"),
+  feedbackStatus: requireElement<HTMLElement>("#feedback-status"),
+  cancelFeedback: requireElement<HTMLButtonElement>("#cancel-feedback"),
+  confirmFeedback: requireElement<HTMLButtonElement>("#confirm-feedback")
 };
 
 const browserFfmpegService = new BrowserFfmpegService();
@@ -171,6 +179,15 @@ let lastBroadcastAt = 0;
 let playerThemeMode: ReaderSyncThemeMode = "auto";
 let themeMediaQuery: MediaQueryList | null = null;
 let compactLayoutRaf: number | null = null;
+let feedbackExportBusy = false;
+
+setReaderSyncLogSink((entry) => {
+  try {
+    chrome.runtime.sendMessage({ type: "LOG_ENTRY", payload: entry });
+  } catch {
+    // If the service worker is restarting, the console log emitted by createLogger is still preserved locally.
+  }
+}, { flushExisting: false });
 
 function clearPlayerPortReconnectTimer(): void {
   if (playerPortReconnectTimer !== null) {
@@ -1028,6 +1045,39 @@ function broadcastIdlePlayerState(): void {
   });
 }
 
+function setFeedbackBusy(busy: boolean): void {
+  feedbackExportBusy = busy;
+  elements.confirmFeedback.disabled = busy;
+  elements.cancelFeedback.disabled = busy;
+  elements.exportLogs.disabled = busy;
+}
+
+function openFeedbackDialog(): void {
+  elements.feedbackStatus.textContent = "确认后会生成 zip 压缩包并打开反馈页。";
+  elements.feedbackStatus.classList.remove("is-error");
+  elements.feedbackDialog.showModal();
+}
+
+async function exportFeedbackBundle(): Promise<void> {
+  if (feedbackExportBusy) {
+    return;
+  }
+  setFeedbackBusy(true);
+  elements.feedbackStatus.textContent = "正在整理日志并生成反馈压缩包...";
+  elements.feedbackStatus.classList.remove("is-error");
+  logger.info("User requested feedback log export", {
+    includeScreenshot: elements.feedbackIncludeScreenshot.checked,
+    hasDescription: elements.feedbackDescription.value.trim().length > 0
+  });
+  postRuntimeMessage({
+    type: "EXPORT_FEEDBACK_BUNDLE",
+    payload: {
+      description: elements.feedbackDescription.value,
+      includeScreenshot: elements.feedbackIncludeScreenshot.checked
+    }
+  });
+}
+
 function seekToParagraph(paragraphIndex: number): void {
   const entry = manifest?.sync.find((item) => item.paragraphIndex === paragraphIndex);
   if (!entry) {
@@ -1092,6 +1142,21 @@ function handleRuntimeMessage(message: RuntimeMessage): void {
     case "PLAYER_CONTROL_COMMAND":
       applyPlayerControl(message);
       return;
+    case "EXPORT_FEEDBACK_BUNDLE_RESULT":
+      setFeedbackBusy(false);
+      if (message.payload.ok) {
+        elements.feedbackStatus.classList.remove("is-error");
+        elements.feedbackStatus.textContent = `已生成 ${message.payload.fileName ?? "反馈压缩包"}，日志 ${message.payload.logCount ?? 0} 条。`;
+        window.setTimeout(() => {
+          if (elements.feedbackDialog.open) {
+            elements.feedbackDialog.close();
+          }
+        }, 1200);
+      } else {
+        elements.feedbackStatus.classList.add("is-error");
+        elements.feedbackStatus.textContent = message.payload.error ?? "导出失败，请稍后重试。";
+      }
+      return;
     default:
       return;
   }
@@ -1142,6 +1207,16 @@ function resetEpisode(): void {
 }
 
 function attachEvents(): void {
+  elements.exportLogs.addEventListener("click", openFeedbackDialog);
+  elements.cancelFeedback.addEventListener("click", () => {
+    if (!feedbackExportBusy) {
+      elements.feedbackDialog.close();
+    }
+  });
+  elements.feedbackForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void exportFeedbackBundle();
+  });
   elements.themeToggle.addEventListener("click", () => {
     void cyclePlayerThemeMode().catch((error) => {
       logger.warn("Failed to persist player theme", {

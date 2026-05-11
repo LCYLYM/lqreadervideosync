@@ -1,11 +1,93 @@
 // src/shared/logger.ts
+var localLogBufferLimit = 400;
+var localLogBuffer = [];
+var logSink = null;
+var logSequence = 0;
+function sanitizeMetadata(value, depth = 0) {
+  if (value === null || value === void 0) {
+    return value;
+  }
+  if (depth >= 4) {
+    return "[MaxDepth]";
+  }
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack
+    };
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value === "function" || typeof value === "symbol") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 80).map((item) => sanitizeMetadata(item, depth + 1));
+  }
+  if (typeof value === "object") {
+    const output = {};
+    for (const [key, nestedValue] of Object.entries(value).slice(0, 80)) {
+      output[key] = sanitizeMetadata(nestedValue, depth + 1);
+    }
+    return output;
+  }
+  return String(value);
+}
+function resolveLocation() {
+  try {
+    return globalThis.location?.href;
+  } catch {
+    return void 0;
+  }
+}
+function resolveUserAgent() {
+  try {
+    return globalThis.navigator?.userAgent;
+  } catch {
+    return void 0;
+  }
+}
+function setReaderSyncLogSink(sink, options) {
+  logSink = sink;
+  if (sink && options?.flushExisting !== false) {
+    for (const entry of localLogBuffer) {
+      sink(entry);
+    }
+  }
+}
 function log(level, scope, message, metadata) {
   const prefix = `[reader-sync:${scope}]`;
   if (metadata === void 0) {
     console[level](`${prefix} ${message}`);
-    return;
+  } else {
+    console[level](`${prefix} ${message}`, metadata);
   }
-  console[level](`${prefix} ${message}`, metadata);
+  const entry = {
+    id: `${Date.now()}-${++logSequence}`,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    level,
+    scope,
+    message,
+    location: resolveLocation(),
+    userAgent: resolveUserAgent()
+  };
+  if (metadata !== void 0) {
+    entry.metadata = sanitizeMetadata(metadata);
+  }
+  localLogBuffer.push(entry);
+  if (localLogBuffer.length > localLogBufferLimit) {
+    localLogBuffer.splice(0, localLogBuffer.length - localLogBufferLimit);
+  }
+  try {
+    logSink?.(entry);
+  } catch (error) {
+    console.warn(`${prefix} log sink failed`, error);
+  }
 }
 function createLogger(scope) {
   return {
@@ -1186,6 +1268,12 @@ var AimReadDomController = class {
 
 // src/content/index.ts
 var logger2 = createLogger("content");
+setReaderSyncLogSink((entry) => {
+  try {
+    chrome.runtime.sendMessage({ type: "LOG_ENTRY", payload: entry });
+  } catch {
+  }
+}, { flushExisting: false });
 var controller = new AimReadDomController();
 var globalWindow = window;
 var handledKeyboardEvents = /* @__PURE__ */ new WeakSet();

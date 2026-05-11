@@ -202,6 +202,30 @@ export interface SetPreferredTabMessage {
   };
 }
 
+export interface LogEntryMessage {
+  type: "LOG_ENTRY";
+  payload: import("./logger").ReaderSyncLogEntry;
+}
+
+export interface ExportFeedbackBundleMessage {
+  type: "EXPORT_FEEDBACK_BUNDLE";
+  payload: {
+    description: string;
+    includeScreenshot: boolean;
+  };
+}
+
+export interface ExportFeedbackBundleResultMessage {
+  type: "EXPORT_FEEDBACK_BUNDLE_RESULT";
+  payload: {
+    ok: boolean;
+    fileName?: string;
+    logCount?: number;
+    screenshotIncluded?: boolean;
+    error?: string;
+  };
+}
+
 export type RuntimeMessage =
   | ActiveArticleSnapshotResponseMessage
   | ActivePageContextResponseMessage
@@ -210,6 +234,9 @@ export type RuntimeMessage =
   | CollectArticleSnapshotMessage
   | CollectPageContextMessage
   | ConnectedTabsResponseMessage
+  | ExportFeedbackBundleMessage
+  | ExportFeedbackBundleResultMessage
+  | LogEntryMessage
   | PageContextUpdateMessage
   | PageParagraphClickedMessage
   | PlayerControlCommandMessage

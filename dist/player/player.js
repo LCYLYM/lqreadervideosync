@@ -1,11 +1,93 @@
 // src/shared/logger.ts
+var localLogBufferLimit = 400;
+var localLogBuffer = [];
+var logSink = null;
+var logSequence = 0;
+function sanitizeMetadata(value, depth = 0) {
+  if (value === null || value === void 0) {
+    return value;
+  }
+  if (depth >= 4) {
+    return "[MaxDepth]";
+  }
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack
+    };
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value === "function" || typeof value === "symbol") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 80).map((item) => sanitizeMetadata(item, depth + 1));
+  }
+  if (typeof value === "object") {
+    const output = {};
+    for (const [key, nestedValue] of Object.entries(value).slice(0, 80)) {
+      output[key] = sanitizeMetadata(nestedValue, depth + 1);
+    }
+    return output;
+  }
+  return String(value);
+}
+function resolveLocation() {
+  try {
+    return globalThis.location?.href;
+  } catch {
+    return void 0;
+  }
+}
+function resolveUserAgent() {
+  try {
+    return globalThis.navigator?.userAgent;
+  } catch {
+    return void 0;
+  }
+}
+function setReaderSyncLogSink(sink, options) {
+  logSink = sink;
+  if (sink && options?.flushExisting !== false) {
+    for (const entry of localLogBuffer) {
+      sink(entry);
+    }
+  }
+}
 function log(level, scope, message, metadata) {
   const prefix = `[reader-sync:${scope}]`;
   if (metadata === void 0) {
     console[level](`${prefix} ${message}`);
-    return;
+  } else {
+    console[level](`${prefix} ${message}`, metadata);
   }
-  console[level](`${prefix} ${message}`, metadata);
+  const entry = {
+    id: `${Date.now()}-${++logSequence}`,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    level,
+    scope,
+    message,
+    location: resolveLocation(),
+    userAgent: resolveUserAgent()
+  };
+  if (metadata !== void 0) {
+    entry.metadata = sanitizeMetadata(metadata);
+  }
+  localLogBuffer.push(entry);
+  if (localLogBuffer.length > localLogBufferLimit) {
+    localLogBuffer.splice(0, localLogBuffer.length - localLogBufferLimit);
+  }
+  try {
+    logSink?.(entry);
+  } catch (error) {
+    console.warn(`${prefix} log sink failed`, error);
+  }
 }
 function createLogger(scope) {
   return {
@@ -1933,6 +2015,7 @@ function requireElement(selector) {
   return element;
 }
 var elements = {
+  exportLogs: requireElement("#export-logs"),
   themeToggle: requireElement("#theme-toggle"),
   readerStatusPill: requireElement("#reader-status-pill"),
   readerStatusText: requireElement("#reader-status-text"),
@@ -1984,7 +2067,14 @@ var elements = {
   playerReaderPill: requireElement("#player-reader-pill"),
   riskDialog: requireElement("#risk-dialog"),
   cancelRisk: requireElement("#cancel-risk"),
-  confirmRisk: requireElement("#confirm-risk")
+  confirmRisk: requireElement("#confirm-risk"),
+  feedbackDialog: requireElement("#feedback-dialog"),
+  feedbackForm: requireElement("#feedback-form"),
+  feedbackDescription: requireElement("#feedback-description"),
+  feedbackIncludeScreenshot: requireElement("#feedback-include-screenshot"),
+  feedbackStatus: requireElement("#feedback-status"),
+  cancelFeedback: requireElement("#cancel-feedback"),
+  confirmFeedback: requireElement("#confirm-feedback")
 };
 var browserFfmpegService = new BrowserFfmpegService();
 var playerPort = null;
@@ -2027,6 +2117,13 @@ var lastBroadcastAt = 0;
 var playerThemeMode = "auto";
 var themeMediaQuery = null;
 var compactLayoutRaf = null;
+var feedbackExportBusy = false;
+setReaderSyncLogSink((entry) => {
+  try {
+    chrome.runtime.sendMessage({ type: "LOG_ENTRY", payload: entry });
+  } catch {
+  }
+}, { flushExisting: false });
 function clearPlayerPortReconnectTimer() {
   if (playerPortReconnectTimer !== null) {
     window.clearTimeout(playerPortReconnectTimer);
@@ -2769,6 +2866,36 @@ function broadcastIdlePlayerState() {
     }
   });
 }
+function setFeedbackBusy(busy) {
+  feedbackExportBusy = busy;
+  elements.confirmFeedback.disabled = busy;
+  elements.cancelFeedback.disabled = busy;
+  elements.exportLogs.disabled = busy;
+}
+function openFeedbackDialog() {
+  elements.feedbackStatus.textContent = "\u786E\u8BA4\u540E\u4F1A\u751F\u6210 zip \u538B\u7F29\u5305\u5E76\u6253\u5F00\u53CD\u9988\u9875\u3002";
+  elements.feedbackStatus.classList.remove("is-error");
+  elements.feedbackDialog.showModal();
+}
+async function exportFeedbackBundle() {
+  if (feedbackExportBusy) {
+    return;
+  }
+  setFeedbackBusy(true);
+  elements.feedbackStatus.textContent = "\u6B63\u5728\u6574\u7406\u65E5\u5FD7\u5E76\u751F\u6210\u53CD\u9988\u538B\u7F29\u5305...";
+  elements.feedbackStatus.classList.remove("is-error");
+  logger.info("User requested feedback log export", {
+    includeScreenshot: elements.feedbackIncludeScreenshot.checked,
+    hasDescription: elements.feedbackDescription.value.trim().length > 0
+  });
+  postRuntimeMessage({
+    type: "EXPORT_FEEDBACK_BUNDLE",
+    payload: {
+      description: elements.feedbackDescription.value,
+      includeScreenshot: elements.feedbackIncludeScreenshot.checked
+    }
+  });
+}
 function seekToParagraph(paragraphIndex) {
   const entry = manifest?.sync.find((item) => item.paragraphIndex === paragraphIndex);
   if (!entry) {
@@ -2831,6 +2958,21 @@ function handleRuntimeMessage(message) {
     case "PLAYER_CONTROL_COMMAND":
       applyPlayerControl(message);
       return;
+    case "EXPORT_FEEDBACK_BUNDLE_RESULT":
+      setFeedbackBusy(false);
+      if (message.payload.ok) {
+        elements.feedbackStatus.classList.remove("is-error");
+        elements.feedbackStatus.textContent = `\u5DF2\u751F\u6210 ${message.payload.fileName ?? "\u53CD\u9988\u538B\u7F29\u5305"}\uFF0C\u65E5\u5FD7 ${message.payload.logCount ?? 0} \u6761\u3002`;
+        window.setTimeout(() => {
+          if (elements.feedbackDialog.open) {
+            elements.feedbackDialog.close();
+          }
+        }, 1200);
+      } else {
+        elements.feedbackStatus.classList.add("is-error");
+        elements.feedbackStatus.textContent = message.payload.error ?? "\u5BFC\u51FA\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002";
+      }
+      return;
     default:
       return;
   }
@@ -2878,6 +3020,16 @@ function resetEpisode() {
   void refreshLocalSubtitleMatch();
 }
 function attachEvents() {
+  elements.exportLogs.addEventListener("click", openFeedbackDialog);
+  elements.cancelFeedback.addEventListener("click", () => {
+    if (!feedbackExportBusy) {
+      elements.feedbackDialog.close();
+    }
+  });
+  elements.feedbackForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void exportFeedbackBundle();
+  });
   elements.themeToggle.addEventListener("click", () => {
     void cyclePlayerThemeMode().catch((error) => {
       logger.warn("Failed to persist player theme", {

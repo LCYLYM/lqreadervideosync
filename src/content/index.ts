@@ -1,9 +1,17 @@
-import { createLogger } from "../shared/logger";
+import { createLogger, setReaderSyncLogSink } from "../shared/logger";
 import { CONTENT_PORT_NAME, type PlaybackState, type RuntimeMessage } from "../shared/protocol";
 import { collectCompleteArticleSnapshot } from "./articleSnapshot";
 import { AimReadDomController } from "./aimReadAdapter";
 
 const logger = createLogger("content");
+
+setReaderSyncLogSink((entry) => {
+  try {
+    chrome.runtime.sendMessage({ type: "LOG_ENTRY", payload: entry });
+  } catch {
+    // Extension context may be invalidated during reload. Local console output above remains available.
+  }
+}, { flushExisting: false });
 const controller = new AimReadDomController();
 const globalWindow = window as Window & { __readerSyncCollectTimer?: number };
 const handledKeyboardEvents = new WeakSet<KeyboardEvent>();

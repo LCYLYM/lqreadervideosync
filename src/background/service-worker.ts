@@ -1,4 +1,4 @@
-import { createLogger } from "../shared/logger";
+import { createLogger, type ReaderSyncLogEntry, setReaderSyncLogSink } from "../shared/logger";
 import {
   type AimReadArticleSnapshot,
   CONTENT_PORT_NAME,
@@ -7,6 +7,7 @@ import {
   type RuntimeMessage,
   PLAYER_PORT_NAME
 } from "../shared/protocol";
+import { createZipArchive, type ZipFileEntry } from "../shared/zip-writer";
 
 const logger = createLogger("background");
 const playerPorts = new Set<chrome.runtime.Port>();
@@ -15,8 +16,20 @@ const contentPortTabIds = new WeakMap<chrome.runtime.Port, number>();
 const pageContexts = new Map<number, AimReadPageContext>();
 const articleSnapshots = new Map<number, AimReadArticleSnapshot>();
 const articleSnapshotErrors = new Map<number, string>();
+const feedbackFormUrl = "https://my.feishu.cn/share/base/form/shrcngqXdrdIP1Qzmr02Wq7070b";
+const runtimeLogLimit = 2000;
+const runtimeLogs: ReaderSyncLogEntry[] = [];
 
 let preferredTabId: number | null = null;
+
+function rememberRuntimeLog(entry: ReaderSyncLogEntry): void {
+  runtimeLogs.push(entry);
+  if (runtimeLogs.length > runtimeLogLimit) {
+    runtimeLogs.splice(0, runtimeLogs.length - runtimeLogLimit);
+  }
+}
+
+setReaderSyncLogSink(rememberRuntimeLog);
 
 function wait(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -42,6 +55,167 @@ function broadcastToPlayers(message: RuntimeMessage): void {
 
 function getKnownReaderTabIds(): number[] {
   return Array.from(new Set([...pageContexts.keys(), ...articleSnapshots.keys(), ...contentPorts.keys()]));
+}
+
+function sanitizeFeedbackFileToken(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 64) || "reader-sync-feedback";
+}
+
+function formatTimestampForFileName(date = new Date()): string {
+  return date.toISOString().replace(/[:.]/g, "-");
+}
+
+function dataUrlToBytes(dataUrl: string): { bytes: Uint8Array; mimeType: string } {
+  const match = dataUrl.match(/^data:([^;,]+);base64,(.*)$/);
+  if (!match) {
+    throw new Error("截图返回的数据格式不可识别。");
+  }
+  const binary = atob(match[2]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return {
+    mimeType: match[1],
+    bytes
+  };
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function buildRuntimeDiagnostics(description: string, screenshotIncluded: boolean): Record<string, unknown> {
+  return {
+    exportedAt: new Date().toISOString(),
+    extension: {
+      id: chrome.runtime.id,
+      version: chrome.runtime.getManifest().version,
+      name: chrome.runtime.getManifest().name
+    },
+    feedback: {
+      description: description.trim() || null,
+      screenshotIncluded
+    },
+    runtime: {
+      preferredTabId,
+      playerPortCount: playerPorts.size,
+      contentPortCount: contentPorts.size,
+      connectedReaderTabIds: getKnownReaderTabIds()
+    },
+    readerTabs: Array.from(pageContexts.entries()).map(([tabId, pageContext]) => ({
+      tabId,
+      title: pageContext.title,
+      articleUrl: pageContext.articleUrl,
+      articleId: pageContext.articleId,
+      categoryId: pageContext.categoryId,
+      paragraphCount: pageContext.paragraphs.length,
+      capturedAt: pageContext.capturedAt,
+      hasArticleSnapshot: articleSnapshots.has(tabId),
+      articleSnapshotError: articleSnapshotErrors.get(tabId) ?? null
+    }))
+  };
+}
+
+async function captureActiveTabScreenshot(): Promise<ZipFileEntry | null> {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const activeTab = tabs[0];
+  if (!activeTab || typeof activeTab.windowId !== "number") {
+    logger.warn("No active tab is available for feedback screenshot");
+    return null;
+  }
+
+  const dataUrl = await chrome.tabs.captureVisibleTab(activeTab.windowId, { format: "png" });
+  const { bytes } = dataUrlToBytes(dataUrl);
+  return {
+    path: "screenshot/current-tab.png",
+    bytes
+  };
+}
+
+async function exportFeedbackBundle(description: string, includeScreenshot: boolean): Promise<{
+  fileName: string;
+  logCount: number;
+  screenshotIncluded: boolean;
+}> {
+  let screenshotError: string | null = null;
+  const screenshotEntry = includeScreenshot ? await captureActiveTabScreenshot().catch((error) => {
+    screenshotError = error instanceof Error ? error.message : String(error);
+    logger.warn("Feedback screenshot capture failed", { error: screenshotError });
+    return null;
+  }) : null;
+  const diagnostics = buildRuntimeDiagnostics(description, screenshotEntry !== null);
+  diagnostics.feedback = {
+    ...(diagnostics.feedback as Record<string, unknown>),
+    screenshotRequested: includeScreenshot,
+    screenshotError
+  };
+  const logs = [...runtimeLogs];
+  const entries: ZipFileEntry[] = [
+    {
+      path: "logs/reader-sync-runtime-logs.json",
+      content: `${JSON.stringify(logs, null, 2)}\n`
+    },
+    {
+      path: "logs/reader-sync-runtime-logs.txt",
+      content: `${logs.map((entry) => {
+        const metadata = entry.metadata === undefined ? "" : ` ${JSON.stringify(entry.metadata)}`;
+        return `${entry.timestamp} [${entry.level}] [${entry.scope}] ${entry.message}${metadata}`;
+      }).join("\n")}\n`
+    },
+    {
+      path: "feedback/feedback.json",
+      content: `${JSON.stringify(diagnostics, null, 2)}\n`
+    },
+    {
+      path: "feedback/feedback.txt",
+      content: [
+        "Reader Sync 用户反馈",
+        "",
+        `导出时间：${diagnostics.exportedAt}`,
+        `插件版本：${chrome.runtime.getManifest().version}`,
+        `问题描述：${description.trim() || "未填写"}`,
+        `包含截图：${screenshotEntry ? "是" : "否"}`,
+        `日志条数：${logs.length}`,
+        "",
+        `请在飞书表单继续反馈：${feedbackFormUrl}`
+      ].join("\n")
+    }
+  ];
+  if (screenshotEntry) {
+    entries.push(screenshotEntry);
+  } else if (includeScreenshot && screenshotError) {
+    entries.push({
+      path: "screenshot/error.txt",
+      content: `截图失败：${screenshotError}\n`
+    });
+  }
+
+  const archive = createZipArchive(entries);
+  const dataUrl = `data:application/zip;base64,${bytesToBase64(archive)}`;
+  const fileName = `${sanitizeFeedbackFileToken(chrome.runtime.getManifest().name)}-${formatTimestampForFileName()}.zip`;
+  await chrome.downloads.download({
+    url: dataUrl,
+    filename: fileName,
+    saveAs: false
+  });
+  await chrome.tabs.create({ url: feedbackFormUrl });
+  return {
+    fileName,
+    logCount: logs.length,
+    screenshotIncluded: screenshotEntry !== null
+  };
 }
 
 async function postMessageToReaderTab(tabId: number, message: RuntimeMessage): Promise<void> {
@@ -339,9 +513,36 @@ function resolveContentPortTabId(port: chrome.runtime.Port): number | null {
 
 async function handlePlayerMessage(port: chrome.runtime.Port, message: RuntimeMessage): Promise<void> {
   switch (message.type) {
+    case "LOG_ENTRY": {
+      rememberRuntimeLog(message.payload);
+      return;
+    }
     case "PLAYER_STATE_UPDATE": {
       const targetTabId = await resolveTargetTabId();
       broadcastToContent(message, targetTabId);
+      return;
+    }
+    case "EXPORT_FEEDBACK_BUNDLE": {
+      try {
+        const result = await exportFeedbackBundle(message.payload.description, message.payload.includeScreenshot);
+        postMessage(port, {
+          type: "EXPORT_FEEDBACK_BUNDLE_RESULT",
+          payload: {
+            ok: true,
+            ...result
+          }
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error("Feedback bundle export failed", { error: errorMessage });
+        postMessage(port, {
+          type: "EXPORT_FEEDBACK_BUNDLE_RESULT",
+          payload: {
+            ok: false,
+            error: errorMessage
+          }
+        });
+      }
       return;
     }
     case "REQUEST_ACTIVE_PAGE_CONTEXT": {
@@ -383,6 +584,9 @@ async function handlePlayerMessage(port: chrome.runtime.Port, message: RuntimeMe
 
 function handleContentMessage(message: RuntimeMessage, tabId: number): void {
   switch (message.type) {
+    case "LOG_ENTRY":
+      rememberRuntimeLog(message.payload);
+      return;
     case "PAGE_CONTEXT_UPDATE": {
       let shouldRefreshArticleSnapshot = !articleSnapshots.has(tabId);
       if (articleSnapshots.has(tabId)) {
@@ -507,6 +711,13 @@ chrome.tabs.onUpdated.addListener((tabId) => {
     return;
   }
   void pushConnectedTabsSnapshot();
+});
+
+chrome.runtime.onMessage.addListener((rawMessage: unknown) => {
+  const message = rawMessage as RuntimeMessage;
+  if (message.type === "LOG_ENTRY") {
+    rememberRuntimeLog(message.payload);
+  }
 });
 
 chrome.runtime.onConnect.addListener((port) => {

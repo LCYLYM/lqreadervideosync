@@ -294,7 +294,8 @@ select {
   max-width: 100%;
 }
 
-.theme-toggle {
+.theme-toggle,
+.icon-action {
   width: 36px;
   height: 36px;
   display: grid;
@@ -310,10 +311,17 @@ select {
   transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
 }
 
-.theme-toggle:hover {
+.theme-toggle:hover,
+.icon-action:hover {
   border-color: rgba(224, 115, 64, 0.45);
   color: var(--orange-2);
   transform: translateY(-1px);
+}
+
+.icon-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .brand {
@@ -1273,6 +1281,77 @@ dialog::backdrop {
 
 .modal .actions {
   margin-top: 22px;
+}
+
+.feedback-modal {
+  display: grid;
+  gap: 14px;
+}
+
+.feedback-field {
+  display: grid;
+  gap: 8px;
+}
+
+.feedback-field span,
+.feedback-check {
+  font-size: 13px;
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.feedback-field textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 112px;
+  border-radius: 12px;
+  border: 1px solid var(--border-2);
+  background: rgba(0, 0, 0, 0.14);
+  color: var(--text);
+  padding: 12px;
+  line-height: 1.55;
+  outline: none;
+}
+
+.feedback-field textarea:focus {
+  border-color: rgba(224, 115, 64, 0.58);
+  box-shadow: 0 0 0 3px var(--orange-bg);
+}
+
+.feedback-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.feedback-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--orange);
+}
+
+.feedback-tip {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.035);
+  overflow-wrap: anywhere;
+}
+
+.feedback-tip a {
+  color: var(--orange-2);
+  text-decoration: none;
+}
+
+.feedback-status {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.feedback-status.is-error {
+  color: var(--red);
 }
 
 body::before {

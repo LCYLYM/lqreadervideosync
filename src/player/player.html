@@ -19,6 +19,7 @@
           </div>
         </div>
         <div class="top-actions">
+          <button class="icon-action" id="export-logs" type="button" aria-label="导出日志反馈" title="导出日志反馈">⤓</button>
           <button class="theme-toggle" id="theme-toggle" type="button" aria-label="切换主题模式">自</button>
           <div class="status-pill" id="reader-status-pill">
             <span class="status-dot"></span>
@@ -221,6 +222,31 @@
           <button class="btn btn-danger" type="button" id="confirm-risk">仍然试播</button>
         </div>
       </div>
+    </dialog>
+
+    <dialog id="feedback-dialog">
+      <form class="modal feedback-modal" id="feedback-form" method="dialog">
+        <div class="modal-icon">⤓</div>
+        <h3>导出日志并反馈</h3>
+        <p>会导出当前插件收集到的全部运行日志、基础诊断信息，以及你选择包含的截图。</p>
+        <label class="feedback-field">
+          <span>遇到什么情况</span>
+          <textarea id="feedback-description" rows="5" placeholder="可选填，例如：导入视频后一直卡在检测中。"></textarea>
+        </label>
+        <label class="feedback-check">
+          <input id="feedback-include-screenshot" type="checkbox" />
+          <span>同时截取当前标签页画面</span>
+        </label>
+        <p class="feedback-tip">
+          请在飞书文档下反馈：
+          <a href="https://my.feishu.cn/share/base/form/shrcngqXdrdIP1Qzmr02Wq7070b" target="_blank" rel="noreferrer">https://my.feishu.cn/share/base/form/shrcngqXdrdIP1Qzmr02Wq7070b</a>
+        </p>
+        <p class="feedback-status" id="feedback-status">确认后会生成 zip 压缩包并打开反馈页。</p>
+        <div class="actions">
+          <button class="btn" type="button" id="cancel-feedback">取消</button>
+          <button class="btn btn-primary" type="submit" id="confirm-feedback">确认反馈</button>
+        </div>
+      </form>
     </dialog>
 
     <script type="module" src="./player.js"></script>
